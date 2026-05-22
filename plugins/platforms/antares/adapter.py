@@ -66,10 +66,12 @@ logger = logging.getLogger(__name__)
 # Dependency check
 # ---------------------------------------------------------------------------
 
+
 def check_requirements() -> bool:
     """Verify aio_pika is installed."""
     try:
         import aio_pika  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -79,6 +81,7 @@ def check_requirements() -> bool:
 # Antares Bridge Adapter
 # ---------------------------------------------------------------------------
 
+
 class AntaresBridgeAdapter(BasePlatformAdapter):
     """Async RabbitMQ bridge adapter for the Antares Telegram bot."""
 
@@ -86,9 +89,9 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         platform = Platform("antares")
         super().__init__(config=config, platform=platform)
 
-        self._connection = None          # aio_pika.RobustConnection
-        self._channel = None             # aio_pika.RobustChannel
-        self._consumer_tag = None        # Tag for unsubscribing
+        self._connection = None  # aio_pika.RobustConnection
+        self._channel = None  # aio_pika.RobustChannel
+        self._consumer_tag = None  # Tag for unsubscribing
 
         # Known chat ids tracked from incoming messages
         self._known_chat_ids: set[str] = set()
@@ -106,14 +109,24 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
 
         extra = self.config.extra or {}
 
-        host = extra.get("rabbitmq_host") or os.getenv("ANTARES_RABBITMQ_HOST", "127.0.0.1")
-        port = int(extra.get("rabbitmq_port") or os.getenv("ANTARES_RABBITMQ_PORT", "5671"))
+        host = extra.get("rabbitmq_host") or os.getenv(
+            "ANTARES_RABBITMQ_HOST", "127.0.0.1"
+        )
+        port = int(
+            extra.get("rabbitmq_port") or os.getenv("ANTARES_RABBITMQ_PORT", "5671")
+        )
         user = extra.get("rabbitmq_user") or os.getenv("ANTARES_RABBITMQ_USER", "")
         password = extra.get("rabbitmq_pass") or os.getenv("ANTARES_RABBITMQ_PASS", "")
         vhost = extra.get("rabbitmq_vhost") or os.getenv("ANTARES_RABBITMQ_VHOST", "/")
-        cafile = extra.get("rabbitmq_cafile") or os.getenv("ANTARES_RABBITMQ_CAFILE", "")
-        certfile = extra.get("rabbitmq_certfile") or os.getenv("ANTARES_RABBITMQ_CERTFILE", "")
-        keyfile = extra.get("rabbitmq_keyfile") or os.getenv("ANTARES_RABBITMQ_KEYFILE", "")
+        cafile = extra.get("rabbitmq_cafile") or os.getenv(
+            "ANTARES_RABBITMQ_CAFILE", ""
+        )
+        certfile = extra.get("rabbitmq_certfile") or os.getenv(
+            "ANTARES_RABBITMQ_CERTFILE", ""
+        )
+        keyfile = extra.get("rabbitmq_keyfile") or os.getenv(
+            "ANTARES_RABBITMQ_KEYFILE", ""
+        )
 
         is_tls = bool(cafile and certfile and keyfile)
 
@@ -136,14 +149,14 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
 
         # Incoming: subscribe to alice.hermes
         alice_exchange = await self._channel.declare_exchange(
-            "alice", ExchangeType.TOPIC, durable=True
+            "alice", ExchangeType.TOPIC
         )
         queue = await self._channel.declare_queue("", exclusive=True)
         await queue.bind(alice_exchange, routing_key="alice.hermes")
         self._consumer_tag = await queue.consume(self._on_rabbitmq_message)
 
         # Outgoing: declare hermes exchange
-        await self._channel.declare_exchange("hermes", ExchangeType.TOPIC, durable=True)
+        await self._channel.declare_exchange("hermes", ExchangeType.TOPIC)
 
         self._running = True
         logger.info("[antares] Connected to RabbitMQ at %s:%s", host, port)
@@ -250,13 +263,16 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
     # Sending messages
     # -----------------------------------------------------------------------
 
-    async def _publish(self, payload: dict, *, action_name: str = "message") -> SendResult:
+    async def _publish(
+        self, payload: dict, *, action_name: str = "message"
+    ) -> SendResult:
         """Publish a JSON payload to the hermes.alice routing key."""
         if not self._channel:
             return SendResult(success=False, error="Not connected")
 
         try:
             import aio_pika
+
             exchange = await self._channel.get_exchange("hermes")
             await exchange.publish(
                 aio_pika.Message(body=json.dumps(payload).encode()),
@@ -289,6 +305,7 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
             return
         try:
             import aio_pika
+
             payload = build_typing_payload(chat_id, typing=False)
             exchange = await self._channel.get_exchange("hermes")
             await exchange.publish(
@@ -325,7 +342,9 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         Note: file_path should be a publicly accessible URL for the remote
         bot to download. The bridge itself does not handle file uploads.
         """
-        payload = build_document_payload(chat_id, file_path, file_name, caption, reply_to)
+        payload = build_document_payload(
+            chat_id, file_path, file_name, caption, reply_to
+        )
         return await self._publish(payload, action_name="document")
 
     async def edit_message(
@@ -352,6 +371,7 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
             return False
         try:
             import aio_pika
+
             payload = build_delete_payload(chat_id, message_id)
             exchange = await self._channel.get_exchange("hermes")
             await exchange.publish(
@@ -390,6 +410,7 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
 # ---------------------------------------------------------------------------
 # Plugin registration
 # ---------------------------------------------------------------------------
+
 
 def register(ctx):
     """Plugin entry point: called by the Hermes plugin system."""
