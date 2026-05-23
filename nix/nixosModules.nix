@@ -188,13 +188,6 @@
 
     identityFile = "${cfg.stateDir}/.container-identity";
 
-    # Default: /var/lib/hermes/workspace → /data/workspace.
-    # Custom paths outside stateDir pass through unchanged (user must add extraVolumes).
-    containerWorkDir =
-      if lib.hasPrefix "${cfg.stateDir}/" cfg.workingDirectory
-      then "${containerDataDir}/${lib.removePrefix "${cfg.stateDir}/" cfg.workingDirectory}"
-      else cfg.workingDirectory;
-
   in {
     options.services.hermes-agent = with lib; {
       enable = mkEnableOption "Hermes Agent gateway service";
@@ -236,7 +229,7 @@
         type = types.str;
         default = "${cfg.stateDir}/workspace";
         defaultText = literalExpression ''"''${cfg.stateDir}/workspace"'';
-        description = "Working directory for the agent (MESSAGING_CWD).";
+        description = "Working directory for the agent.";
       };
 
       # ── Declarative config ───────────────────────────────────────────────
@@ -865,7 +858,6 @@
             HOME = cfg.stateDir;
             HERMES_HOME = "${cfg.stateDir}/.hermes";
             HERMES_MANAGED = "true";
-            MESSAGING_CWD = cfg.workingDirectory;
           } // lib.optionalAttrs (cfg.environmentFiles != []) {
             HERMES_DOTENV_EXTRA = lib.concatStringsSep ":" cfg.environmentFiles;
           };
@@ -964,9 +956,8 @@
                 --env HERMES_HOME=${containerDataDir}/.hermes \
                 --env HERMES_MANAGED=true \
                 --env HOME=${containerHomeDir} \
-                --env MESSAGING_CWD=${containerWorkDir} \\
                 ${lib.optionalString (cfg.environmentFiles != [])
-                  "--env HERMES_DOTENV_EXTRA=${lib.concatStringsSep ":" cfg.environmentFiles}"} \\
+                  "--env HERMES_DOTENV_EXTRA=${lib.concatStringsSep ":" cfg.environmentFiles}"} \
                 ${lib.concatStringsSep " " cfg.container.extraOptions} \
                 ${cfg.container.image} \
                 ${containerDataDir}/current-package/bin/hermes gateway run --replace ${lib.concatStringsSep " " cfg.extraArgs}
