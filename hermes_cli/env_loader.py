@@ -172,4 +172,17 @@ def load_hermes_dotenv(
         _load_dotenv_with_fallback(project_env_path, override=not loaded)
         loaded.append(project_env_path)
 
+    # ── Extra dotenv paths (HERMES_DOTENV_EXTRA) ───────────────────────
+    # Colon-separated list of additional .env-style files.  Loaded with
+    # override=False so user ~/.hermes/.env values always win.  Used by
+    # NixOS module to inject agenix-decrypted secrets without copying
+    # them into $HERMES_HOME/.env.
+    extra_paths_raw = os.getenv("HERMES_DOTENV_EXTRA", "")
+    if extra_paths_raw:
+        for raw in extra_paths_raw.split(":"):
+            p = Path(raw.strip())
+            if p.is_file():
+                _load_dotenv_with_fallback(p, override=False)
+                loaded.append(p)
+
     return loaded

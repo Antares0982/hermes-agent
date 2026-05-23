@@ -17,7 +17,6 @@ For the full voice feature set — including CLI microphone mode, spoken replies
 | Telegram | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ |
 | Discord | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Slack | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Google Chat | — | ✅ | ✅ | ✅ | — | ✅ | — |
 | WhatsApp | — | ✅ | ✅ | — | — | ✅ | ✅ |
 | Signal | — | ✅ | ✅ | — | — | ✅ | ✅ |
 | SMS | — | — | — | — | — | — | — |
@@ -47,8 +46,8 @@ flowchart TB
             dc[Discord]
             wa[WhatsApp]
             sl[Slack]
-            gc[Google Chat]
             sig[Signal]
+            wa[WhatsApp]
             sms[SMS]
             em[Email]
             ha[Home Assistant]
@@ -76,7 +75,6 @@ flowchart TB
     dc --> store
     wa --> store
     sl --> store
-    gc --> store
     sig --> store
     sms --> store
     em --> store
@@ -386,7 +384,6 @@ Each platform has its own toolset:
 | Discord | `hermes-discord` | Full tools including terminal |
 | WhatsApp | `hermes-whatsapp` | Full tools including terminal |
 | Slack | `hermes-slack` | Full tools including terminal |
-| Google Chat | `hermes-google-chat` | Full tools including terminal |
 | Signal | `hermes-signal` | Full tools including terminal |
 | SMS | `hermes-sms` | Full tools including terminal |
 | Email | `hermes-email` | Full tools including terminal |
@@ -410,7 +407,6 @@ Each platform has its own toolset:
 - [Telegram Setup](telegram.md)
 - [Discord Setup](discord.md)
 - [Slack Setup](slack.md)
-- [Google Chat Setup](google_chat.md)
 - [WhatsApp Setup](whatsapp.md)
 - [Signal Setup](signal.md)
 - [SMS Setup (Twilio)](sms.md)

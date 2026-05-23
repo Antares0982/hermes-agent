@@ -32,6 +32,10 @@
       else cfg.package.override { inherit (cfg) extraPythonPackages; };
     hermes-agent = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.default;
 
+    # Python version used by hermes-agent.  Bump this single number when the
+    # package upgrades its Python interpreter (hermes-agent.nix, python.nix).
+    hermesPythonPkg = "python314";
+
     # Deep-merge config type (from 0xrsydn/nix-hermes-agent)
     deepConfigType = lib.types.mkOptionType {
       name = "hermes-config-attrs";
@@ -188,13 +192,6 @@
 
     identityFile = "${cfg.stateDir}/.container-identity";
 
-    # Default: /var/lib/hermes/workspace → /data/workspace.
-    # Custom paths outside stateDir pass through unchanged (user must add extraVolumes).
-    containerWorkDir =
-      if lib.hasPrefix "${cfg.stateDir}/" cfg.workingDirectory
-      then "${containerDataDir}/${lib.removePrefix "${cfg.stateDir}/" cfg.workingDirectory}"
-      else cfg.workingDirectory;
-
   in {
     options.services.hermes-agent = with lib; {
       enable = mkEnableOption "Hermes Agent gateway service";
@@ -236,7 +233,7 @@
         type = types.str;
         default = "${cfg.stateDir}/workspace";
         defaultText = literalExpression ''"''${cfg.stateDir}/workspace"'';
-        description = "Working directory for the agent (MESSAGING_CWD).";
+        description = "Working directory for the agent.";
       };
 
       # ── Declarative config ───────────────────────────────────────────────
@@ -494,11 +491,11 @@
           Python packages to add to PYTHONPATH for entry-point plugin discovery.
           These are pip-packaged plugins that register via the
           hermes_agent.plugins entry-point group. Each package must be built
-          with the same Python interpreter as hermes (python312).
+          with the same Python interpreter as hermes (${hermesPythonPkg}).
         '';
         example = literalExpression ''
           [
-            (pkgs.python312Packages.buildPythonPackage {
+            (pkgs.${hermesPythonPkg}Packages.buildPythonPackage {
               pname = "rtk-hermes";
               version = "1.0.0";
               src = pkgs.fetchFromGitHub {
@@ -799,22 +796,34 @@
             ''}
           ''}
 
-          # Seed .env from Nix-declared environment + environmentFiles.
-          # Hermes reads $HERMES_HOME/.env at startup via load_hermes_dotenv(),
-          # so this is the single source of truth for both native and container mode.
-          ${lib.optionalString (cfg.environment != {} || cfg.environmentFiles != []) ''
+          # Seed .env from Nix-declared environment (non-secret vars only).
+          # Secret files from environmentFiles are passed via HERMES_DOTENV_EXTRA
+          # at runtime — they are NOT copied here.
+          ${lib.optionalString (cfg.environment != {}) ''
             ENV_FILE="${cfg.stateDir}/.hermes/.env"
             install -o ${cfg.user} -g ${cfg.group} -m 0640 /dev/null "$ENV_FILE"
             cat > "$ENV_FILE" <<'HERMES_NIX_ENV_EOF'
     ${envFileContent}
     HERMES_NIX_ENV_EOF
-            ${lib.concatStringsSep "\n" (map (f: ''
-              if [ -f "${f}" ]; then
-                echo "" >> "$ENV_FILE"
-                cat "${f}" >> "$ENV_FILE"
-              fi
-            '') cfg.environmentFiles)}
           ''}
+
+          # ── Bundled skills as external dir ─────────────────────────────────
+          # Register bundled skills in config.yaml instead of copying to
+          # ~/.hermes/skills/. Keeps Nix store files where they are and
+          # avoids read-only permission errors when the agent patches skills.
+          BUNDLED_SKILLS_DIR="${effectivePackage}/share/hermes-agent/skills"
+          if [ -d "$BUNDLED_SKILLS_DIR" ]; then
+            ${pkgs.${hermesPythonPkg}}/bin/python3 -c "
+    import yaml
+    p='${cfg.stateDir}/.hermes/config.yaml'
+    c=yaml.safe_load(open(p)) or {}
+    c.setdefault('skills',{}).setdefault('external_dirs',[])
+    b='${effectivePackage}/share/hermes-agent/skills'
+    if b not in c['skills']['external_dirs']:
+        c['skills']['external_dirs'].append(b)
+        yaml.dump(c, open(p,'w'), default_flow_style=False)
+    " 2>/dev/null || true
+          fi
 
           # Link documents into workspace
           ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: _value: ''
@@ -853,7 +862,8 @@
             HOME = cfg.stateDir;
             HERMES_HOME = "${cfg.stateDir}/.hermes";
             HERMES_MANAGED = "true";
-            MESSAGING_CWD = cfg.workingDirectory;
+          } // lib.optionalAttrs (cfg.environmentFiles != []) {
+            HERMES_DOTENV_EXTRA = lib.concatStringsSep ":" cfg.environmentFiles;
           };
 
           serviceConfig = {
@@ -861,9 +871,9 @@
             Group = cfg.group;
             WorkingDirectory = cfg.workingDirectory;
 
-            # cfg.environment and cfg.environmentFiles are written to
-            # $HERMES_HOME/.env by the activation script. load_hermes_dotenv()
-            # reads them at Python startup — no systemd EnvironmentFile needed.
+            # cfg.environment is written to $HERMES_HOME/.env by the
+            # activation script. cfg.environmentFiles are passed via
+            # HERMES_DOTENV_EXTRA. load_hermes_dotenv() reads both.
 
             ExecStart = lib.concatStringsSep " " ([
               "${effectivePackage}/bin/hermes"
@@ -950,7 +960,8 @@
                 --env HERMES_HOME=${containerDataDir}/.hermes \
                 --env HERMES_MANAGED=true \
                 --env HOME=${containerHomeDir} \
-                --env MESSAGING_CWD=${containerWorkDir} \
+                ${lib.optionalString (cfg.environmentFiles != [])
+                  "--env HERMES_DOTENV_EXTRA=${lib.concatStringsSep ":" cfg.environmentFiles}"} \
                 ${lib.concatStringsSep " " cfg.container.extraOptions} \
                 ${cfg.container.image} \
                 ${containerDataDir}/current-package/bin/hermes gateway run --replace ${lib.concatStringsSep " " cfg.extraArgs}

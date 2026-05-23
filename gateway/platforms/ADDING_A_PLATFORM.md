@@ -28,8 +28,7 @@ status display, gateway setup, and more.
   auto-populate `OPTIONAL_ENV_VARS` in `hermes_cli/config.py` so the setup
   wizard surfaces proper descriptions, prompts, password flags, and URLs.
 
-See `plugins/platforms/irc/`, `plugins/platforms/teams/`, and
-`plugins/platforms/google_chat/` for complete working examples, and
+See `plugins/platforms/irc/` and `plugins/platforms/teams/` for complete working examples, and
 `website/docs/developer-guide/adding-platform-adapters.md` for the full
 plugin guide with code examples and hook documentation.
 
