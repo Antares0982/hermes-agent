@@ -87,9 +87,12 @@ _catalog_lock = threading.Lock()
 def _locales_dir() -> Path:
     """Return the directory containing locale YAML files.
 
-    Lives next to the repo root so both the bundled install and editable
-    checkouts find it without PYTHONPATH gymnastics.
+    Checks ``HERMES_LOCALES`` env var first (set by Nix / Homebrew wrappers),
+    then falls back to the repo-relative ``locales/`` directory.
     """
+    env_override = os.environ.get("HERMES_LOCALES")
+    if env_override:
+        return Path(env_override)
     # agent/i18n.py -> agent/ -> repo root
     return Path(__file__).resolve().parent.parent / "locales"
 
