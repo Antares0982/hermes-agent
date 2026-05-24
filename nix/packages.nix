@@ -4,8 +4,10 @@
   perSystem =
     { pkgs, inputs', ... }:
     let
+      python = (import ./python-version.nix) pkgs;
       hermesAgent = pkgs.callPackage ./hermes-agent.nix {
         inherit (inputs) uv2nix pyproject-nix pyproject-build-systems;
+        inherit python;
         npm-lockfile-fix = inputs'.npm-lockfile-fix.packages.default;
         # Only embed clean revs — dirtyRev doesn't represent any upstream
         # commit, so comparing it would always claim "update available".

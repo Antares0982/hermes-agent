@@ -213,7 +213,8 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
 
         # Verify extraPythonPackages PYTHONPATH injection
         extra-python-packages = let
-          testPkg = pkgs.python312Packages.pyfiglet;
+          pythonPkg = (import ./python-version.nix) pkgs;
+          testPkg = pythonPkg.pkgs.pyfiglet;
           hermesWithExtra = hermes-agent.override {
             extraPythonPackages = [ testPkg ];
           };

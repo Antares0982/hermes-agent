@@ -32,9 +32,9 @@
       else cfg.package.override { inherit (cfg) extraPythonPackages; };
     hermes-agent = inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.default;
 
-    # Python version used by hermes-agent.  Bump this single number when the
-    # package upgrades its Python interpreter (hermes-agent.nix, python.nix).
-    hermesPythonPkg = "python314";
+    # Python version used by hermes-agent — imported from the centralized
+    # python-version.nix file.  Bump the version there; all call sites update.
+    hermesPython = (import ./python-version.nix) pkgs;
 
     # Deep-merge config type (from 0xrsydn/nix-hermes-agent)
     deepConfigType = lib.types.mkOptionType {
@@ -491,11 +491,11 @@
           Python packages to add to PYTHONPATH for entry-point plugin discovery.
           These are pip-packaged plugins that register via the
           hermes_agent.plugins entry-point group. Each package must be built
-          with the same Python interpreter as hermes (${hermesPythonPkg}).
+          with the same Python interpreter as hermes (python314).
         '';
         example = literalExpression ''
           [
-            (pkgs.${hermesPythonPkg}Packages.buildPythonPackage {
+            (pkgs.python314Packages.buildPythonPackage {
               pname = "rtk-hermes";
               version = "1.0.0";
               src = pkgs.fetchFromGitHub {
@@ -813,7 +813,7 @@
           # avoids read-only permission errors when the agent patches skills.
           BUNDLED_SKILLS_DIR="${effectivePackage}/share/hermes-agent/skills"
           if [ -d "$BUNDLED_SKILLS_DIR" ]; then
-            ${pkgs.${hermesPythonPkg}}/bin/python3 -c "
+            ${hermesPython}/bin/python3 -c "
     import yaml
     p='${cfg.stateDir}/.hermes/config.yaml'
     c=yaml.safe_load(open(p)) or {}
