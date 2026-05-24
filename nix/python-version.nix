@@ -10,4 +10,4 @@
 #   # then use python.pkgs.X, python.sitePackages, python.withPackages, …
 #
 # To bump the Python version, change this single line and rebuild.
-pkgs: pkgs.python313
+pkgs: pkgs.python314
