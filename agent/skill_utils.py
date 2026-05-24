@@ -271,12 +271,21 @@ def get_external_skills_dirs() -> List[Path]:
 
 
 def get_all_skills_dirs() -> List[Path]:
-    """Return all skill directories: local ``~/.hermes/skills/`` first, then external.
+    """Return all skill directories: local, bundled, then external.
 
-    The local dir is always first (and always included even if it doesn't exist
-    yet — callers handle that).  External dirs follow in config order.
+    The local ``~/.hermes/skills/`` dir is always first (and always included
+    even if it doesn't exist yet — callers handle that).  Bundled skills from
+    ``HERMES_BUNDLED_SKILLS`` (set by Nix / Homebrew wrappers) come next,
+    followed by external dirs in config order.
+
+    Local skills take precedence when names collide with bundled or external.
     """
     dirs = [get_skills_dir()]
+    bundled = os.environ.get("HERMES_BUNDLED_SKILLS")
+    if bundled:
+        bundled_path = Path(bundled)
+        if bundled_path.is_dir() and bundled_path.resolve() != get_skills_dir().resolve():
+            dirs.append(bundled_path)
     dirs.extend(get_external_skills_dirs())
     return dirs
 

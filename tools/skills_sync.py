@@ -178,6 +178,10 @@ def sync_skills(quiet: bool = False) -> dict:
     """
     Sync bundled skills into ~/.hermes/skills/ using the manifest.
 
+    When ``HERMES_BUNDLED_SKILLS`` points to an external directory (e.g. Nix
+    store), skills are loaded at runtime directly from that location — this
+    function only maintains the manifest for tracking; it will not copy files.
+
     Returns:
         dict with keys: copied (list), updated (list), skipped (int),
                         user_modified (list), cleaned (list), total_bundled (int)
@@ -188,6 +192,16 @@ def sync_skills(quiet: bool = False) -> dict:
             "copied": [], "updated": [], "skipped": 0,
             "user_modified": [], "cleaned": [], "total_bundled": 0,
         }
+
+    # When bundled skills come from an external package-manager path (Nix /
+    # Homebrew via HERMES_BUNDLED_SKILLS), they are loaded at runtime straight
+    # from that location — copying them into ~/.hermes/skills/ is unnecessary
+    # and would cause duplicates with the runtime discovery.  We still
+    # maintain the manifest so ``hermes skills`` can report what's bundled.
+    _bundled_is_external = (
+        bundled_dir.resolve() != SKILLS_DIR.resolve()
+        and bool(os.environ.get("HERMES_BUNDLED_SKILLS"))
+    )
 
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     manifest = _read_manifest()
@@ -227,12 +241,18 @@ def sync_skills(quiet: bool = False) -> dict:
                             f"to replace it with the bundled version."
                         )
                 else:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copytree(skill_src, dest)
-                    copied.append(skill_name)
-                    manifest[skill_name] = bundled_hash
-                    if not quiet:
-                        print(f"  + {skill_name}")
+                    if _bundled_is_external:
+                        # Skills are loaded at runtime from the external
+                        # bundled dir — no local copy needed.
+                        manifest[skill_name] = bundled_hash
+                        skipped += 1
+                    else:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copytree(skill_src, dest)
+                        copied.append(skill_name)
+                        manifest[skill_name] = bundled_hash
+                        if not quiet:
+                            print(f"  + {skill_name}")
             except (OSError, IOError) as e:
                 if not quiet:
                     print(f"  ! Failed to copy {skill_name}: {e}")
@@ -263,27 +283,47 @@ def sync_skills(quiet: bool = False) -> dict:
 
             # User copy matches origin — check if bundled has a newer version
             if bundled_hash != origin_hash:
-                try:
-                    # Move old copy to a backup so we can restore on failure
-                    backup = dest.with_suffix(".bak")
-                    shutil.move(str(dest), str(backup))
+                if _bundled_is_external:
+                    # Bundled skills are loaded from the external dir at
+                    # runtime.  The local copy is a leftover from before
+                    # dual-loading — delete it so the runtime sees only
+                    # the (updated) bundled version.
                     try:
-                        shutil.copytree(skill_src, dest)
-                        manifest[skill_name] = bundled_hash
-                        updated.append(skill_name)
-                        if not quiet:
-                            print(f"  ↑ {skill_name} (updated)")
-                        # Remove backup after successful copy
-                        shutil.rmtree(backup, ignore_errors=True)
-                    except (OSError, IOError):
-                        # Restore from backup
-                        if backup.exists() and not dest.exists():
-                            shutil.move(str(backup), str(dest))
-                        raise
-                except (OSError, IOError) as e:
+                        shutil.rmtree(dest, ignore_errors=True)
+                    except OSError:
+                        pass
+                    manifest[skill_name] = bundled_hash
                     if not quiet:
-                        print(f"  ! Failed to update {skill_name}: {e}")
+                        print(f"  ~ {skill_name} (cleaned, bundled is external)")
+                else:
+                    try:
+                        # Move old copy to a backup so we can restore on failure
+                        backup = dest.with_suffix(".bak")
+                        shutil.move(str(dest), str(backup))
+                        try:
+                            shutil.copytree(skill_src, dest)
+                            manifest[skill_name] = bundled_hash
+                            updated.append(skill_name)
+                            if not quiet:
+                                print(f"  ↑ {skill_name} (updated)")
+                            # Remove backup after successful copy
+                            shutil.rmtree(backup, ignore_errors=True)
+                        except (OSError, IOError):
+                            # Restore from backup
+                            if backup.exists() and not dest.exists():
+                                shutil.move(str(backup), str(dest))
+                            raise
+                    except (OSError, IOError) as e:
+                        if not quiet:
+                            print(f"  ! Failed to update {skill_name}: {e}")
             else:
+                if _bundled_is_external:
+                    # Local copy is a leftover duplicate — bundled is loaded
+                    # from the external dir at runtime.
+                    try:
+                        shutil.rmtree(dest, ignore_errors=True)
+                    except OSError:
+                        pass
                 skipped += 1  # bundled unchanged, user unchanged
 
         else:
@@ -295,16 +335,18 @@ def sync_skills(quiet: bool = False) -> dict:
     for name in cleaned:
         del manifest[name]
 
-    # Also copy DESCRIPTION.md files for categories (if not already present)
-    for desc_md in bundled_dir.rglob("DESCRIPTION.md"):
-        rel = desc_md.relative_to(bundled_dir)
-        dest_desc = SKILLS_DIR / rel
-        if not dest_desc.exists():
-            try:
-                dest_desc.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(desc_md, dest_desc)
-            except (OSError, IOError) as e:
-                logger.debug("Could not copy %s: %s", desc_md, e)
+    # Also copy DESCRIPTION.md files for categories (if not already present).
+    # Skip when bundled is external — descriptions are discoverable from that dir.
+    if not _bundled_is_external:
+        for desc_md in bundled_dir.rglob("DESCRIPTION.md"):
+            rel = desc_md.relative_to(bundled_dir)
+            dest_desc = SKILLS_DIR / rel
+            if not dest_desc.exists():
+                try:
+                    dest_desc.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(desc_md, dest_desc)
+                except (OSError, IOError) as e:
+                    logger.debug("Could not copy %s: %s", desc_md, e)
 
     _write_manifest(manifest)
 
