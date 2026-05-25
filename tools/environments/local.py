@@ -292,6 +292,16 @@ def _make_run_env(env: dict) -> dict:
     if not _IS_WINDOWS and "/usr/bin" not in existing_path.split(":"):
         run_env["PATH"] = f"{existing_path}:{_SANE_PATH}" if existing_path else _SANE_PATH
 
+    # On NixOS, /run/current-system/sw/bin holds system packages (gh, nix,
+    # cachix, ...) but is often absent from the hermetic PATH.  Append it
+    # when it exists so tools installed via environment.systemPackages are
+    # visible to subprocesses.
+    _nixos_swbin = "/run/current-system/sw/bin"
+    if (not _IS_WINDOWS
+            and os.path.isdir(_nixos_swbin)
+            and _nixos_swbin not in run_env.get("PATH", "").split(":")):
+        run_env["PATH"] = run_env.get("PATH", "") + ":" + _nixos_swbin
+
     # Per-profile HOME isolation: redirect system tool configs (git, ssh, gh,
     # npm …) into {HERMES_HOME}/home/ when that directory exists.  Only the
     # subprocess sees the override — the Python process keeps the real HOME.
