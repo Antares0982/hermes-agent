@@ -64,6 +64,31 @@ def build_document_payload(
     }
 
 
+def build_clarify_payload(
+    chat_id: str,
+    clarify_id: str,
+    question: str,
+    choices: List[str],
+    reply_to: Optional[str] = None,
+) -> dict:
+    """Build a clarify prompt for inline keyboard rendering by Alice.
+
+    When *choices* is non-empty, Alice should render Telegram
+    ``InlineKeyboardMarkup`` buttons — one per choice (numbered 0..N-1)
+    plus a final ``✏️ Other (type answer)`` button that enters text-capture
+    mode.  Open-ended clarifies (empty choices) are rendered by the base
+    adapter as plain text with text-capture, and do not use this payload.
+    """
+    return {
+        "action": "clarify",
+        "chat_id": chat_id,
+        "clarify_id": clarify_id,
+        "question": question,
+        "choices": list(choices) if choices else [],
+        "reply_to_message_id": reply_to,
+    }
+
+
 def build_edit_payload(
     chat_id: str,
     message_id: str,

@@ -54,6 +54,7 @@ from .protocol import (
     build_document_payload,
     build_edit_payload,
     build_delete_payload,
+    build_clarify_payload,
     extract_media_urls,
     extract_media_types,
     parse_incoming_message,
@@ -197,6 +198,12 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
                 return
 
             action = data.get("action")
+
+            # Handle clarify callback responses from Alice
+            if action == "clarify_response":
+                await self._handle_clarify_response(data)
+                return
+
             if action != "new_message":
                 return
 
@@ -382,6 +389,87 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         except Exception:
             logger.debug("[antares] Failed to delete message", exc_info=True)
             return False
+
+    # -----------------------------------------------------------------------
+    # Clarify tool support (inline keyboard via bridge protocol)
+    # -----------------------------------------------------------------------
+
+    async def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices,
+        clarify_id: str,
+        session_key: str,
+        metadata=None,
+    ) -> SendResult:
+        """Render a clarify prompt.
+
+        Multi-choice mode (choices non-empty): sends a structured
+        ``action: clarify`` payload so Alice can render inline keyboard
+        buttons.  Open-ended mode (choices empty): falls back to the base
+        adapter's plain-text + text-capture path.
+        """
+        if choices:
+            payload = build_clarify_payload(
+                chat_id=chat_id,
+                clarify_id=clarify_id,
+                question=question,
+                choices=list(choices),
+                reply_to=None,
+            )
+            return await self._publish(payload, action_name="clarify")
+        else:
+            return await super().send_clarify(
+                chat_id=chat_id,
+                question=question,
+                choices=choices,
+                clarify_id=clarify_id,
+                session_key=session_key,
+                metadata=metadata,
+            )
+
+    async def _handle_clarify_response(self, data: dict) -> None:
+        """Resolve a pending clarify from an Alice callback.
+
+        Alice sends ``action: clarify_response`` when the user taps an
+        inline keyboard button (``choice`` = 0-based index) or types a
+        free-form answer after the \"Other\" button (``choice`` = \"other\",
+        ``text`` = the typed answer).
+
+        Text-capture mode (open-ended clarifies) is handled by the gateway's
+        text-intercept via ``mark_awaiting_text`` and does not use this path.
+        """
+        from tools.clarify_gateway import resolve_gateway_clarify, mark_awaiting_text
+
+        clarify_id = data.get("clarify_id")
+        if not clarify_id:
+            logger.warning("[antares] clarify_response missing clarify_id")
+            return
+
+        choice = data.get("choice")
+        text = (data.get("text") or "").strip()
+
+        if choice is not None and choice != "other":
+            # Button press: Alice resolves the choice index to the label
+            # text and passes it back as ``text``.  Use it directly.
+            response = text if text else str(choice)
+        elif choice == "other":
+            # "Other" button tapped — flip into text-capture mode so the
+            # next user message in this session is intercepted.
+            mark_awaiting_text(clarify_id)
+            return
+        else:
+            # Plain text response (open-ended fallback via bridge)
+            response = text
+
+        if response:
+            resolved = resolve_gateway_clarify(clarify_id, response)
+            if resolved:
+                logger.info(
+                    "[antares] Resolved clarify %s via bridge response",
+                    clarify_id,
+                )
 
     # -----------------------------------------------------------------------
     # Chat info
