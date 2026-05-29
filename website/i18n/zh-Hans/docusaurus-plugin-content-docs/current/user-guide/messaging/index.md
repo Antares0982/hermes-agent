@@ -425,7 +425,6 @@ launchd plist 是静态的——如果你在配置网关后安装了新工具（
 | Discord | `hermes-discord` | 完整工具，包括终端 |
 | WhatsApp | `hermes-whatsapp` | 完整工具，包括终端 |
 | Slack | `hermes-slack` | 完整工具，包括终端 |
-| Google Chat | `hermes-google_chat` | 完整工具，包括终端 |
 | Signal | `hermes-signal` | 完整工具，包括终端 |
 | SMS | `hermes-sms` | 完整工具，包括终端 |
 | Email | `hermes-email` | 完整工具，包括终端 |
@@ -527,7 +526,6 @@ display:
 - [Telegram 配置](telegram.md)
 - [Discord 配置](discord.md)
 - [Slack 配置](slack.md)
-- [Google Chat 配置](google_chat.md)
 - [WhatsApp 配置](whatsapp.md)
 - [Signal 配置](signal.md)
 - [SMS 配置（Twilio）](sms.md)
