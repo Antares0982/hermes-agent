@@ -14,14 +14,18 @@ def build_send_payload(
     text: str,
     reply_to: Optional[str] = None,
     parse_mode: str = "markdown",
+    correlation_id: Optional[str] = None,
 ) -> dict:
-    return {
+    payload = {
         "action": "send",
         "chat_id": chat_id,
         "text": text,
         "reply_to_message_id": reply_to,
         "parse_mode": parse_mode,
     }
+    if correlation_id:
+        payload["correlation_id"] = correlation_id
+    return payload
 
 
 def build_typing_payload(chat_id: str, typing: bool = True) -> dict:

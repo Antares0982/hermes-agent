@@ -32,10 +32,12 @@ ANTARES_RABBITMQ_CAFILE, ANTARES_RABBITMQ_CERTFILE, ANTARES_RABBITMQ_KEYFILE.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import ssl
+import uuid
 from typing import Any, Dict, Optional
 
 from gateway.platforms.base import (
@@ -98,6 +100,12 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         self._known_chat_ids: set[str] = set()
         # Cached chat info: chat_id -> {name, type}
         self._chat_info_cache: Dict[str, dict] = {}
+
+        # Pending correlation → Future for message_ack responses from Alice.
+        # Used to retrieve the real Telegram message_id for stream editing
+        # and tool-progress editing to work.
+        self._pending_acks: Dict[str, asyncio.Future] = {}
+        self._ack_timeout: float = 15.0
 
     # -----------------------------------------------------------------------
     # Connection lifecycle
@@ -167,6 +175,13 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         """Close RabbitMQ channel and connection."""
         self._running = False
 
+        # Cancel all pending acks so no _publish() caller hangs
+        # waiting for a message_ack that will never arrive.
+        for future in self._pending_acks.values():
+            if not future.done():
+                future.cancel()
+        self._pending_acks.clear()
+
         if self._channel:
             try:
                 await self._channel.close()
@@ -202,6 +217,18 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
             # Handle clarify callback responses from Alice
             if action == "clarify_response":
                 await self._handle_clarify_response(data)
+                return
+
+            # Handle message_ack: Alice confirms a send/edit with the
+            # real Telegram message_id. Resolves the pending Future so
+            # _publish() returns a proper SendResult with message_id.
+            if action == "message_ack":
+                correlation_id = data.get("correlation_id")
+                message_id = data.get("message_id")
+                if correlation_id and correlation_id in self._pending_acks:
+                    future = self._pending_acks.pop(correlation_id)
+                    if not future.done():
+                        future.set_result(str(message_id))
                 return
 
             if action != "new_message":
@@ -273,10 +300,25 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
     async def _publish(
         self, payload: dict, *, action_name: str = "message"
     ) -> SendResult:
-        """Publish a JSON payload to the hermes.alice routing key."""
+        """Publish a JSON payload to the hermes.alice routing key.
+
+        For ``send`` actions, appends a correlation_id and awaits a
+        ``message_ack`` response from Alice to retrieve the real Telegram
+        message_id. Other actions (typing, delete, ...) are fire-and-forget.
+        """
         if not self._channel:
             return SendResult(success=False, error="Not connected")
 
+        # Only ``send`` needs a message_id back from Alice so the gateway
+        # can track it for progressive editing (streaming, tool-progress).
+        if action_name in ("send",):
+            return await self._publish_with_ack(payload, action_name)
+        return await self._publish_fire_and_forget(payload, action_name)
+
+    async def _publish_fire_and_forget(
+        self, payload: dict, action_name: str
+    ) -> SendResult:
+        """Publish without waiting for a response (typing, delete, etc.)."""
         try:
             import aio_pika
 
@@ -288,6 +330,45 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
             return SendResult(success=True)
         except Exception as e:
             logger.error("[antares] Failed to publish %s: %s", action_name, e)
+            return SendResult(success=False, error=str(e))
+
+    async def _publish_with_ack(
+        self, payload: dict, action_name: str
+    ) -> SendResult:
+        """Publish and await a ``message_ack`` for the real Telegram message_id."""
+        correlation_id = uuid.uuid4().hex
+        payload["correlation_id"] = correlation_id
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._pending_acks[correlation_id] = future
+
+        try:
+            import aio_pika
+
+            exchange = await self._channel.get_exchange("hermes")
+            await exchange.publish(
+                aio_pika.Message(body=json.dumps(payload).encode()),
+                routing_key="hermes.alice",
+            )
+
+            message_id = await asyncio.wait_for(future, timeout=self._ack_timeout)
+            return SendResult(success=True, message_id=message_id)
+        except asyncio.TimeoutError:
+            logger.debug(
+                "[antares] message_ack timeout for %s (cid=%s), falling back",
+                action_name, correlation_id,
+            )
+            self._pending_acks.pop(correlation_id, None)
+            return SendResult(success=True)  # graceful: edit disabled but msg sent
+        except asyncio.CancelledError:
+            self._pending_acks.pop(correlation_id, None)
+            if not future.done():
+                future.cancel()
+            raise
+        except Exception as e:
+            logger.error("[antares] Failed to publish %s: %s", action_name, e)
+            self._pending_acks.pop(correlation_id, None)
+            if not future.done():
+                future.cancel()
             return SendResult(success=False, error=str(e))
 
     async def send(
