@@ -450,7 +450,7 @@ LINE 两者都支持：阈值默认为 45 秒用于免费 postback 获取，`LIN
 
 ### 参考实现（Plugin 路径）
 
-完整的工作示例参见仓库中的 `plugins/platforms/irc/` — 一个无外部依赖的完整异步 IRC 适配器。`plugins/platforms/teams/` 涵盖 Bot Framework / Adaptive Cards，`plugins/platforms/google_chat/` 涵盖基于 OAuth 的 REST API，`plugins/platforms/line/` 涵盖带平台专属慢速 LLM UX 的 webhook 驱动消息 API。
+完整的工作示例参见仓库中的 `plugins/platforms/irc/` — 一个无外部依赖的完整异步 IRC 适配器。`plugins/platforms/teams/` 涵盖 Bot Framework / Adaptive Cards，`plugins/platforms/line/` 涵盖带平台专属慢速 LLM UX 的 webhook 驱动消息 API。
 
 ---
 
