@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sysconfig
 import threading
 from functools import lru_cache
 from pathlib import Path
@@ -87,14 +88,63 @@ _catalog_lock = threading.Lock()
 def _locales_dir() -> Path:
     """Return the directory containing locale YAML files.
 
-    Checks ``HERMES_LOCALES`` env var first (set by Nix / Homebrew wrappers),
-    then falls back to the repo-relative ``locales/`` directory.
+    Resolution order, first existing wins:
+
+    1. ``HERMES_LOCALES`` env var -- set by the Antares0982 Nix wrapper
+       for backward compatibility.
+    2. ``HERMES_BUNDLED_LOCALES`` env var -- set by the Nix wrapper (or any
+       sealed-packaging system) to point at the installed catalog directory.
+    3. ``<repo-root>/locales`` -- source checkouts and ``pip install -e .``,
+       where the working tree sits next to ``agent/``.
+    4. ``<sysconfig data|purelib|platlib>/locales`` -- pip wheel installs.
+       setuptools ``data-files`` extracts ``locales/*.yaml`` under the
+       interpreter's ``data`` scheme; the other schemes are checked as a
+       safety net for nonstandard layouts.
+
+    Falling through to the source-style path (even when missing) keeps
+    ``_load_catalog`` error messages informative -- it logs the path it
+    looked at -- rather than raising.
     """
-    env_override = os.environ.get("HERMES_LOCALES")
-    if env_override:
-        return Path(env_override)
-    # agent/i18n.py -> agent/ -> repo root
-    return Path(__file__).resolve().parent.parent / "locales"
+    # Backward compat: Antares0982 Nix wrapper sets HERMES_LOCALES
+    override = os.getenv("HERMES_LOCALES", "").strip()
+    if override:
+        candidate = Path(override)
+        if candidate.is_dir():
+            return candidate
+
+    override = os.getenv("HERMES_BUNDLED_LOCALES", "").strip()
+    if override:
+        candidate = Path(override)
+        if candidate.is_dir():
+            return candidate
+        logger.warning(
+            "HERMES_BUNDLED_LOCALES points to a non-directory path (%s); "
+            "falling back to bundled/source locale resolution",
+            override,
+        )
+
+    # agent/i18n.py -> agent/ -> repo root (source checkout, editable install)
+    source_dir = Path(__file__).resolve().parent.parent / "locales"
+    if source_dir.is_dir():
+        return source_dir
+
+    # pip wheel install: data-files lands under the interpreter data scheme.
+    # ``data`` (== sys.prefix in a venv) is where setuptools data-files extract
+    # and is checked first. ``purelib``/``platlib`` (site-packages) are a safety
+    # net for nonstandard layouts. NOTE: this does NOT cover ``pip install
+    # --user`` (user scheme, ~/.local/locales) or ``pip install --target`` --
+    # both are out of scope; see the plan header.
+    for scheme in ("data", "purelib", "platlib"):
+        raw = sysconfig.get_path(scheme)
+        if not raw:
+            continue
+        candidate = Path(raw) / "locales"
+        if candidate.is_dir():
+            return candidate
+
+    # Last resort: return the source-style path so _load_catalog's catalog-missing
+    # log (logger.debug "i18n catalog missing for %s at %s") stays informative.
+    return source_dir
 
 
 def _normalize_lang(value: Any) -> str:
