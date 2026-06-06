@@ -59,10 +59,6 @@ let
     filter = path: _type: !(lib.hasInfix "/index-cache/" path);
   };
 
-  # Locale YAML files for i18n (separate from Python site-packages so
-  # the Nix wrapper can expose them via HERMES_LOCALES).
-  locales = ../locales;
-
   # Import bundled plugins (memory, context_engine, platforms/*).  Keeping
   # them out of the Python site-packages keeps import semantics identical
   # to a dev checkout — the loader reads them from HERMES_BUNDLED_PLUGINS.
@@ -172,7 +168,6 @@ stdenv.mkDerivation (finalAttrs: {
     cp -r ${bundledPlugins} $out/share/hermes-agent/plugins
     cp -r ${bundledLocales} $out/share/hermes-agent/locales
     cp -r ${hermesWeb} $out/share/hermes-agent/web_dist
-    cp -r ${locales} $out/share/hermes-agent/locales
 
     mkdir -p $out/ui-tui
     cp -r ${hermesTui}/lib/hermes-tui/* $out/ui-tui/
