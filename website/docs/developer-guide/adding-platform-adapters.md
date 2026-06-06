@@ -454,7 +454,7 @@ See `plugins/platforms/line/adapter.py` for the full LINE postback implementatio
 
 ### Reference Implementations (Plugin Path)
 
-See `plugins/platforms/irc/` in the repo for a complete working example — a full async IRC adapter with zero external dependencies. `plugins/platforms/teams/` covers Bot Framework / Adaptive Cards, `plugins/platforms/google_chat/` covers OAuth-based REST APIs, and `plugins/platforms/line/` covers webhook-driven Messaging APIs with platform-specific slow-LLM UX.
+See `plugins/platforms/irc/` in the repo for a complete working example — a full async IRC adapter with zero external dependencies. `plugins/platforms/teams/` covers Bot Framework / Adaptive Cards, `plugins/platforms/line/` covers webhook-driven Messaging APIs with platform-specific slow-LLM UX.
 
 ---
 
