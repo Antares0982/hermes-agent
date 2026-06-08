@@ -3456,7 +3456,21 @@ class GatewayRunner:
             )
             if can_steer:
                 try:
-                    steered = bool(running_agent.steer(steer_text))
+                    _chat_id = event.source.chat_id
+                    _msg_id = event.message_id
+                    _adapter_ref = adapter  # capture for closure
+
+                    def _on_steer_delivered(steer_text: str) -> None:
+                        preview = steer_text[:80] + ("..." if len(steer_text) > 80 else "")
+                        asyncio.ensure_future(
+                            _adapter_ref._send_with_retry(
+                                chat_id=_chat_id,
+                                content=f"✅ Steer delivered ({len(steer_text)} chars): {preview}",
+                                reply_to=_msg_id,
+                            )
+                        )
+
+                    steered = bool(running_agent.steer(steer_text, on_delivered=_on_steer_delivered))
                 except Exception as exc:
                     logger.warning("Gateway steer failed for session %s: %s", session_key, exc)
                     steered = False
