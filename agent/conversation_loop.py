@@ -894,6 +894,7 @@ def run_conversation(
                         "Pre-API-call steer drain: injected into tool msg at index %d",
                         _si,
                     )
+                    agent._steer_text_delivered(_pre_api_steer)
                     break
             if not _injected:
                 # No tool message to inject into — put it back so
@@ -4819,6 +4820,7 @@ def run_conversation(
     _leftover_steer = agent._drain_pending_steer()
     if _leftover_steer:
         result["pending_steer"] = _leftover_steer
+        agent._pending_steer_callbacks.clear()
     agent._response_was_previewed = False
     
     # Include interrupt message if one triggered the interrupt

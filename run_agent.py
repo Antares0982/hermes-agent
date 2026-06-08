@@ -2334,8 +2334,9 @@ class AIAgent:
         if _steer_lock is not None:
             with _steer_lock:
                 self._pending_steer = None
+                self._pending_steer_callbacks.clear()
 
-    def steer(self, text: str) -> bool:
+    def steer(self, text: str, on_delivered=None) -> bool:
         """
         Inject a user message into the next tool result without interrupting.
 
@@ -2349,6 +2350,10 @@ class AIAgent:
 
         Args:
             text: The user text to inject. Empty strings are ignored.
+            on_delivered: Optional callback invoked when the steer text is
+                actually appended to a tool result (i.e. when the model will
+                see it on the next iteration). Receives the delivered text
+                as its sole argument. Fires at most once per steer call.
 
         Returns:
             True if the steer was accepted, False if the text was empty.
@@ -2363,12 +2368,20 @@ class AIAgent:
             # in those stubs.
             existing = getattr(self, "_pending_steer", None)
             self._pending_steer = (existing + "\n" + cleaned) if existing else cleaned
+            if on_delivered is not None:
+                _cbs = getattr(self, "_pending_steer_callbacks", None)
+                if _cbs is None:
+                    self._pending_steer_callbacks = [on_delivered]
+                else:
+                    _cbs.append(on_delivered)
             return True
         with _lock:
             if self._pending_steer:
                 self._pending_steer = self._pending_steer + "\n" + cleaned
             else:
                 self._pending_steer = cleaned
+            if on_delivered is not None:
+                self._pending_steer_callbacks.append(on_delivered)
         return True
 
     def _drain_pending_steer(self) -> Optional[str]:
@@ -2386,6 +2399,20 @@ class AIAgent:
             text = self._pending_steer
             self._pending_steer = None
         return text
+
+    def _steer_text_delivered(self, text: str) -> None:
+        """Fire all pending steer delivery callbacks and clear the list.
+
+        Called after the steer text is successfully appended to a tool
+        result — i.e. when the model will see it on the next API iteration.
+        Each callback receives the delivered text as its sole argument.
+        """
+        cbs = self._pending_steer_callbacks
+        if not cbs:
+            return
+        self._pending_steer_callbacks = []
+        for cb in cbs:
+            cb(text)
 
     def _record_file_mutation_result(
         self,

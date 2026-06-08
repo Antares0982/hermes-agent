@@ -2343,6 +2343,7 @@ def apply_pending_steer_to_tool_results(agent, messages: list, num_tool_msgs: in
         len(steer_text),
         steer_text[:120] + ("..." if len(steer_text) > 120 else ""),
     )
+    agent._steer_text_delivered(steer_text)
 
 
 
