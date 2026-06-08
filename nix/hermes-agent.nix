@@ -15,12 +15,7 @@
   ripgrep,
   git,
   openssh,
-  ffmpeg,
   tirith,
-
-  # linux-only deps
-  wl-clipboard,
-  xclip,
 
   # Flake inputs — passed explicitly by packages.nix and overlays.nix
   uv2nix,
@@ -87,12 +82,7 @@ let
     ripgrep
     git
     openssh
-    ffmpeg
     tirith
-  ]
-  ++ lib.optionals stdenv.isLinux [
-    wl-clipboard
-    xclip
   ];
 
   runtimePath = lib.makeBinPath runtimeDeps;
@@ -216,7 +206,7 @@ stdenv.mkDerivation (finalAttrs: {
     # can prepend its `/bin` to PATH.  The desktop's resolver step 4
     # ("existing hermes on PATH") then picks up the fully wrapped
     # `hermes` binary — venv with all deps, bundled skills/plugins,
-    # runtime PATH (ripgrep/git/ffmpeg/etc).  No re-implementation
+    # runtime PATH (ripgrep/git/etc).  No re-implementation
     # of the agent resolution in the desktop wrapper.
     hermesDesktop = callPackage ./desktop.nix {
       inherit hermesNpmLib electron;
