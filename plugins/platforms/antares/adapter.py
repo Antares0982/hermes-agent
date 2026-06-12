@@ -97,6 +97,7 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         self._connection = None  # aio_pika.RobustConnection
         self._channel = None  # aio_pika.RobustChannel
         self._consumer_tag = None  # Tag for unsubscribing
+        self._loop = None  # Gateway's main event loop (set in connect())
 
         # Known chat ids tracked from incoming messages
         self._known_chat_ids: set[str] = set()
@@ -192,6 +193,7 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         await self._channel.declare_exchange("hermes", ExchangeType.TOPIC)
 
         self._running = True
+        self._loop = asyncio.get_running_loop()
         logger.info("[antares] Connected to RabbitMQ at %s:%s", host, port)
         return True
 
@@ -347,9 +349,25 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         For ``send`` actions, appends a correlation_id and awaits a
         ``message_ack`` response from Alice to retrieve the real Telegram
         message_id. Other actions (typing, delete, ...) are fire-and-forget.
+
+        When called from a different event loop (e.g. the ``send_message``
+        tool running in the agent's thread pool), the call is redirected to
+        the adapter's event loop via ``asyncio.run_coroutine_threadsafe``.
         """
         if not self._channel:
             return SendResult(success=False, error="Not connected")
+
+        # Cross-loop guard: redirect to the adapter's event loop
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if self._loop is not None and current_loop is not self._loop:
+            cf = asyncio.run_coroutine_threadsafe(
+                self._publish(payload, action_name=action_name),
+                self._loop,
+            )
+            return await asyncio.wrap_future(cf)
 
         # Only ``send`` needs a message_id back from Alice so the gateway
         # can track it for progressive editing (streaming, tool-progress).
