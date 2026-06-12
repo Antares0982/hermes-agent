@@ -457,7 +457,6 @@ DANGEROUS_PATTERNS = [
     (r'\b(python[23]?|perl|ruby|node)\s+<<', "script execution via heredoc"),
     # Git destructive operations that can lose uncommitted work or rewrite
     # shared history. Not captured by rm/chmod/etc patterns.
-    (r'\bgit\s+reset\s+--hard\b', "git reset --hard (destroys uncommitted changes)"),
     (r'\bgit\s+push\b.*--force\b', "git force push (rewrites remote history)"),
     (r'\bgit\s+push\b.*-f\b', "git force push short flag (rewrites remote history)"),
     (r'\bgit\s+clean\s+-[^\s]*f', "git clean with force (deletes untracked files)"),

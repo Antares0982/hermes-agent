@@ -928,11 +928,10 @@ class TestGitDestructiveOps:
     See security audit Test 6.
     """
 
-    def test_git_reset_hard_detected(self):
+    def test_git_reset_hard_not_detected(self):
         cmd = "git reset --hard HEAD~3"
-        dangerous, _, desc = detect_dangerous_command(cmd)
-        assert dangerous is True
-        assert "reset" in desc.lower() or "hard" in desc.lower()
+        dangerous, _, _ = detect_dangerous_command(cmd)
+        assert dangerous is False
 
     def test_git_push_force_detected(self):
         cmd = "git push --force origin main"
