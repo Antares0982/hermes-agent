@@ -33,6 +33,7 @@ ANTARES_RABBITMQ_CAFILE, ANTARES_RABBITMQ_CERTFILE, ANTARES_RABBITMQ_KEYFILE.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -105,7 +106,12 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         # Pending correlation → Future for message_ack responses from Alice.
         # Used to retrieve the real Telegram message_id for stream editing
         # and tool-progress editing to work.
-        self._pending_acks: Dict[str, asyncio.Future] = {}
+        #
+        # Uses concurrent.futures.Future (thread-safe) instead of
+        # asyncio.Future so that cross-event-loop callers (e.g. the
+        # send_message tool running in the agent's thread pool) can
+        # safely await acks without "attached to a different loop".
+        self._pending_acks: Dict[str, concurrent.futures.Future] = {}
         self._ack_timeout: float = 15.0
 
         # Directory for decoding and caching incoming base64 media
@@ -195,9 +201,9 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
 
         # Cancel all pending acks so no _publish() caller hangs
         # waiting for a message_ack that will never arrive.
-        for future in self._pending_acks.values():
-            if not future.done():
-                future.cancel()
+        for cf in self._pending_acks.values():
+            if not cf.done():
+                cf.cancel()
         self._pending_acks.clear()
 
         if self._channel:
@@ -371,11 +377,16 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
     async def _publish_with_ack(
         self, payload: dict, action_name: str
     ) -> SendResult:
-        """Publish and await a ``message_ack`` for the real Telegram message_id."""
+        """Publish and await a ``message_ack`` for the real Telegram message_id.
+
+        Uses ``concurrent.futures.Future`` so the pending ack is safe to
+        resolve from the gateway's main event loop even when the caller
+        (e.g. the ``send_message`` tool) runs on a different event loop.
+        """
         correlation_id = uuid.uuid4().hex
         payload["correlation_id"] = correlation_id
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._pending_acks[correlation_id] = future
+        cf: concurrent.futures.Future = concurrent.futures.Future()
+        self._pending_acks[correlation_id] = cf
 
         try:
             import aio_pika
@@ -386,7 +397,9 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
                 routing_key="hermes.alice",
             )
 
-            message_id = await asyncio.wait_for(future, timeout=self._ack_timeout)
+            message_id = await asyncio.wait_for(
+                asyncio.wrap_future(cf), timeout=self._ack_timeout
+            )
             return SendResult(success=True, message_id=message_id)
         except asyncio.TimeoutError:
             logger.debug(
@@ -394,17 +407,19 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
                 action_name, correlation_id,
             )
             self._pending_acks.pop(correlation_id, None)
+            if not cf.done():
+                cf.cancel()
             return SendResult(success=True)  # graceful: edit disabled but msg sent
         except asyncio.CancelledError:
             self._pending_acks.pop(correlation_id, None)
-            if not future.done():
-                future.cancel()
+            if not cf.done():
+                cf.cancel()
             raise
         except Exception as e:
             logger.error("[antares] Failed to publish %s: %s", action_name, e)
             self._pending_acks.pop(correlation_id, None)
-            if not future.done():
-                future.cancel()
+            if not cf.done():
+                cf.cancel()
             return SendResult(success=False, error=str(e))
 
     async def send(
