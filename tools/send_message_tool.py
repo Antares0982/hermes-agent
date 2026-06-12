@@ -514,52 +514,70 @@ async def _send_via_adapter(
             adapter = runner.adapters.get(platform)
         except Exception:
             adapter = None
+        gateway_loop = getattr(runner, '_gateway_loop', None)
         if adapter is not None:
-            try:
+            async def _do_send(chunk, media_files):
                 metadata = {"thread_id": thread_id} if thread_id else None
                 result = await adapter.send(chat_id=chat_id, content=chunk, metadata=metadata)
+                if result.success:
+                    message_id = result.message_id
+                elif not media_files:
+                    return {"error": f"Adapter send failed: {result.error}"}
+                else:
+                    message_id = None
+
+                # Send media attachments through the adapter
+                import os as _os
+                for media_path, _is_voice in (media_files or []):
+                    if not _os.path.exists(media_path):
+                        logger.warning(
+                            "send_message: media file not found, skipping: %s",
+                            media_path,
+                        )
+                        continue
+                    ext = _os.path.splitext(media_path)[1].lower()
+                    try:
+                        if ext in _IMAGE_EXTS and not force_document:
+                            media_result = await adapter.send_image(
+                                chat_id=chat_id, image_url=media_path,
+                            )
+                        else:
+                            media_result = await adapter.send_document(
+                                chat_id=chat_id, file_path=media_path,
+                            )
+                        if media_result.success:
+                            message_id = media_result.message_id or message_id
+                    except Exception as e:
+                        logger.error(
+                            "send_message: failed to send media via adapter: %s", e,
+                        )
+                if message_id:
+                    return {"success": True, "message_id": message_id}
+                if media_files:
+                    return {"success": True}  # best-effort
+                return {"error": f"Adapter send failed: {result.error}"}
+
+            try:
+                if gateway_loop is not None:
+                    try:
+                        current_loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        current_loop = None
+                else:
+                    current_loop = None
+
+                if gateway_loop is not None and current_loop is not gateway_loop:
+                    cf = asyncio.run_coroutine_threadsafe(
+                        _do_send(chunk, media_files),
+                        gateway_loop,
+                    )
+                    return await asyncio.wrap_future(cf)
+                else:
+                    return await _do_send(chunk, media_files)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 return {"error": f"Plugin platform send failed: {e}"}
-            if result.success:
-                message_id = result.message_id
-            elif not media_files:
-                return {"error": f"Adapter send failed: {result.error}"}
-            else:
-                # Text send failed but we still have media — try media
-                message_id = None
-
-            # Send media attachments through the adapter
-            import os as _os
-            for media_path, _is_voice in (media_files or []):
-                if not _os.path.exists(media_path):
-                    logger.warning(
-                        "send_message: media file not found, skipping: %s",
-                        media_path,
-                    )
-                    continue
-                ext = _os.path.splitext(media_path)[1].lower()
-                try:
-                    if ext in _IMAGE_EXTS and not force_document:
-                        media_result = await adapter.send_image(
-                            chat_id=chat_id, image_url=media_path,
-                        )
-                    else:
-                        media_result = await adapter.send_document(
-                            chat_id=chat_id, file_path=media_path,
-                        )
-                    if media_result.success:
-                        message_id = media_result.message_id or message_id
-                except Exception as e:
-                    logger.error(
-                        "send_message: failed to send media via adapter: %s", e,
-                    )
-            if message_id:
-                return {"success": True, "message_id": message_id}
-            if media_files:
-                return {"success": True}  # best-effort
-            return {"error": f"Adapter send failed: {result.error}"}
 
     platform_name = platform.value if hasattr(platform, "value") else str(platform)
     entry = None
