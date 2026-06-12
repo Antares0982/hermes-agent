@@ -605,6 +605,21 @@ def compress_context(
         agent.session_id or "none", _pre_msg_count, len(compressed),
         f"{_compressed_est:,}",
     )
+    # Notify the user about the compression result.  Manual /compress
+    # already surfaces before/after counts via summarize_manual_compression();
+    # automatic compression should too so users can see when and how much
+    # context was compacted.
+    _post_msg_count = len(compressed)
+    _before_tokens = approx_tokens or 0
+    if _before_tokens > 0:
+        agent._emit_status(
+            f"🗜️ Compressed: {_pre_msg_count} → {_post_msg_count} messages, "
+            f"~{_before_tokens:,} → ~{_compressed_est:,} tokens"
+        )
+    else:
+        agent._emit_status(
+            f"🗜️ Compressed: {_pre_msg_count} → {_post_msg_count} messages"
+        )
     # Release the lock on the OLD session_id only AFTER rotation completed
     # and all post-rotation bookkeeping (memory manager, context engine,
     # file dedup) ran. A concurrent path that wakes up the moment we
