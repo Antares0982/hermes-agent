@@ -153,7 +153,19 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
             connect_kw["ssl"] = True
             connect_kw["ssl_context"] = context
 
-        self._connection = await aio_pika.connect_robust(**connect_kw)
+        logger.info(
+            "[antares] Connecting to RabbitMQ at %s:%s (TLS=%s, vhost=%s)...",
+            host, port, is_tls, vhost,
+        )
+
+        try:
+            self._connection = await aio_pika.connect_robust(**connect_kw)
+        except Exception as e:
+            logger.error(
+                "[antares] Failed to connect to RabbitMQ at %s:%s: %s",
+                host, port, e, exc_info=True,
+            )
+            return False
         self._channel = await self._connection.channel()
 
         # Incoming: subscribe to alice.hermes
@@ -291,7 +303,14 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
             }
 
             # Dispatch to Hermes agent
-            await self.handle_message(event)
+            try:
+                await self.handle_message(event)
+            except Exception as e:
+                logger.error(
+                    "[antares] Failed to dispatch incoming message from %s (%s): %s",
+                    parsed["chat_id"], parsed.get("message_id", "?"), e,
+                    exc_info=True,
+                )
 
     # -----------------------------------------------------------------------
     # Sending messages
@@ -400,8 +419,10 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
                 aio_pika.Message(body=json.dumps(payload).encode()),
                 routing_key="hermes.alice",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "[antares] Failed to stop typing for %s: %s", chat_id, e, exc_info=True
+            )
 
     async def send_image(
         self,
