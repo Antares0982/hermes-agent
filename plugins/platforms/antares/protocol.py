@@ -6,7 +6,13 @@ All messages are JSON bodies sent over RabbitMQ topic exchanges.
 
 from __future__ import annotations
 
+import base64
+import logging
+import os
+import tempfile
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def build_send_payload(
@@ -137,8 +143,102 @@ def parse_incoming_message(data: dict) -> Dict[str, Any]:
 
 
 def extract_media_urls(media: List[dict]) -> list[str]:
-    return [m["url"] for m in media if "url" in m]
+    urls = []
+    for m in media:
+        if "data" in m:
+            # base64-encoded media — caller should use process_incoming_media()
+            # to decode and cache; here we return a placeholder that gets
+            # replaced later.  Keep for backward compat with URL-based media.
+            urls.append("")
+        elif "url" in m:
+            urls.append(m["url"])
+        else:
+            urls.append("")
+    return urls
 
 
 def extract_media_types(media: List[dict]) -> list[str]:
     return [m["type"] for m in media if "type" in m]
+
+
+_MIME_TO_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/opus": ".opus",
+    "audio/mp4": ".m4a",
+    "audio/wav": ".wav",
+    "application/pdf": ".pdf",
+    "application/zip": ".zip",
+    "application/json": ".json",
+    "text/plain": ".txt",
+    "text/csv": ".csv",
+    "text/html": ".html",
+}
+
+
+def _ext_for_mime(mime_type: str) -> str:
+    return _MIME_TO_EXT.get(mime_type, "")
+
+
+def process_incoming_media(
+    media: List[dict], cache_dir: str
+) -> tuple:
+    """Decode base64-encoded media and save to cache files.
+
+    Returns (urls, types) where urls are local file paths usable by
+    the hermes agent's tools (vision_analyze, read_file, etc).
+    """
+    urls = []
+    types = []
+    os.makedirs(cache_dir, exist_ok=True)
+
+    for m in media:
+        media_type = m.get("type", "")
+        types.append(media_type)
+
+        if "data" in m:
+            try:
+                data_bytes = base64.b64decode(m["data"])
+            except Exception as e:
+                logger.warning(
+                    "[antares] Failed to decode incoming base64 media: %s", e
+                )
+                urls.append("")
+                continue
+
+            filename = m.get("filename", "media")
+            ext = os.path.splitext(filename)[1]
+            if not ext:
+                mime_type = m.get("mime_type", "")
+                ext = _ext_for_mime(mime_type)
+            if not ext:
+                ext = ".bin"
+            try:
+                fd, path = tempfile.mkstemp(
+                    suffix=ext, prefix="antares_", dir=cache_dir
+                )
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data_bytes)
+                urls.append(path)
+                logger.debug(
+                    "[antares] Cached incoming media: type=%s size=%d path=%s",
+                    media_type, len(data_bytes), path,
+                )
+            except OSError as e:
+                logger.error(
+                    "[antares] Failed to write incoming media to cache: %s", e
+                )
+                urls.append("")
+        elif "url" in m:
+            urls.append(m["url"])
+        else:
+            urls.append("")
+
+    return urls, types

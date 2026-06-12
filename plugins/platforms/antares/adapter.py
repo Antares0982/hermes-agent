@@ -60,6 +60,7 @@ from .protocol import (
     extract_media_urls,
     extract_media_types,
     parse_incoming_message,
+    process_incoming_media,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,11 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         # and tool-progress editing to work.
         self._pending_acks: Dict[str, asyncio.Future] = {}
         self._ack_timeout: float = 15.0
+
+        # Directory for decoding and caching incoming base64 media
+        self._media_cache_dir: str = os.path.join(
+            os.path.expanduser("~/.hermes/cache"), "antares_media"
+        )
 
     # -----------------------------------------------------------------------
     # Connection lifecycle
@@ -284,14 +290,25 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
                 message_type = MessageType.TEXT
 
             # Build MessageEvent
+            try:
+                media_urls, media_types = process_incoming_media(
+                    parsed["media"], self._media_cache_dir
+                )
+            except Exception as e:
+                logger.error(
+                    "[antares] Failed to process incoming media for %s (%s): %s",
+                    parsed["chat_id"], parsed.get("message_id", "?"), e,
+                    exc_info=True,
+                )
+                media_urls, media_types = [], []
             event = MessageEvent(
                 text=text,
                 message_type=message_type,
                 source=source,
                 message_id=parsed["message_id"],
                 reply_to_message_id=parsed["reply_to_message_id"],
-                media_urls=extract_media_urls(parsed["media"]),
-                media_types=extract_media_types(parsed["media"]),
+                media_urls=media_urls,
+                media_types=media_types,
             )
 
             # Cache chat info
@@ -432,7 +449,36 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
-        """Send an image via the bridge."""
+        """Send an image via the bridge.
+
+        If *image_url* is a local file path (starts with ``/`` or ``~/``),
+        the file is read and sent as base64-encoded bytes.  Otherwise it is
+        forwarded as a URL for the remote bot to download.
+        """
+        import base64 as _b64
+
+        expanded = os.path.expanduser(image_url)
+        if os.path.isfile(expanded):
+            try:
+                with open(expanded, "rb") as f:
+                    img_bytes = f.read()
+                logger.info(
+                    "[antares] Sending local image to %s: %s (%d bytes)",
+                    chat_id, expanded, len(img_bytes),
+                )
+                return await self._publish(
+                    {
+                        "action": "image",
+                        "chat_id": chat_id,
+                        "data": _b64.b64encode(img_bytes).decode("ascii"),
+                        "caption": caption,
+                        "reply_to_message_id": reply_to,
+                    },
+                    action_name="image",
+                )
+            except Exception as e:
+                logger.error("[antares] Failed to read local image: %s", e)
+                return SendResult(success=False, error=str(e))
         payload = build_image_payload(chat_id, image_url, caption, reply_to)
         return await self._publish(payload, action_name="image")
 
@@ -448,9 +494,35 @@ class AntaresBridgeAdapter(BasePlatformAdapter):
     ) -> SendResult:
         """Send a document via the bridge.
 
-        Note: file_path should be a publicly accessible URL for the remote
-        bot to download. The bridge itself does not handle file uploads.
+        If *file_path* is a local file, the file is read and sent as
+        base64-encoded bytes.  Otherwise it is forwarded as a URL.
         """
+        import base64 as _b64
+
+        expanded = os.path.expanduser(file_path)
+        if os.path.isfile(expanded):
+            try:
+                with open(expanded, "rb") as f:
+                    doc_bytes = f.read()
+                doc_name = file_name or os.path.basename(expanded)
+                logger.info(
+                    "[antares] Sending local document to %s: %s (%d bytes)",
+                    chat_id, doc_name, len(doc_bytes),
+                )
+                return await self._publish(
+                    {
+                        "action": "document",
+                        "chat_id": chat_id,
+                        "data": _b64.b64encode(doc_bytes).decode("ascii"),
+                        "file_name": doc_name,
+                        "caption": caption,
+                        "reply_to_message_id": reply_to,
+                    },
+                    action_name="document",
+                )
+            except Exception as e:
+                logger.error("[antares] Failed to read local document: %s", e)
+                return SendResult(success=False, error=str(e))
         payload = build_document_payload(
             chat_id, file_path, file_name, caption, reply_to
         )
