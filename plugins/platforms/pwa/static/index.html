@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#1a1a2e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Hermes 助手</title>
+<link rel="manifest" href="/manifest.json">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#1a1a2e;--surface:#16213e;--surface2:#0f3460;
+  --text:#e8e8e8;--text2:#a0a0b8;--accent:#e94560;
+  --accent2:#533483;--green:#4ecca3;--red:#e94560;
+  --user-bubble:#0f3460;--asst-bubble:#16213e;
+  --font-size:18px;--font-large:22px;--font-small:14px;
+  --radius:12px;--gap:12px;
+}
+html,body{height:100%;overflow:hidden}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:var(--font-size);background:var(--bg);color:var(--text);
+  line-height:1.6;-webkit-text-size-adjust:100%;
+}
+/* Auth screen */
+#auth-screen{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  height:100%;padding:32px;gap:24px;
+}
+#auth-screen h1{font-size:48px;margin-bottom:8px}
+#auth-screen p{color:var(--text2);text-align:center;max-width:300px}
+#auth-password{
+  width:100%;max-width:320px;padding:14px 18px;font-size:var(--font-large);
+  border:2px solid var(--surface2);border-radius:var(--radius);
+  background:var(--surface);color:var(--text);text-align:center;
+  -webkit-appearance:none;
+}
+#auth-password:focus{outline:none;border-color:var(--accent)}
+#auth-btn{
+  width:100%;max-width:320px;padding:14px;font-size:var(--font-large);
+  border:none;border-radius:var(--radius);background:var(--accent);
+  color:#fff;font-weight:700;cursor:pointer;
+  min-height:52px;-webkit-tap-highlight-color:transparent;
+}
+#auth-btn:active{opacity:.8}
+#auth-error{color:var(--red);font-size:var(--font-small);min-height:20px}
+/* Main chat */
+#chat-screen{display:none;flex-direction:column;height:100%}
+#topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 16px;background:var(--surface);min-height:52px;
+  gap:8px;flex-shrink:0;
+}
+#topbar .title{font-size:var(--font-large);font-weight:700}
+#conn-dot{width:12px;height:12px;border-radius:50%;background:var(--red);flex-shrink:0}
+#conn-dot.on{background:var(--green)}
+#search-toggle{
+  background:none;border:none;color:var(--text);font-size:24px;
+  cursor:pointer;padding:4px 8px;min-width:44px;min-height:44px;
+}
+#search-bar{
+  display:none;padding:8px 16px;background:var(--surface);gap:8px;flex-shrink:0;
+}
+#search-bar.active{display:flex}
+#search-input{
+  flex:1;padding:10px 14px;font-size:var(--font-size);
+  border:2px solid var(--surface2);border-radius:var(--radius);
+  background:var(--bg);color:var(--text);
+  -webkit-appearance:none;
+}
+#search-input:focus{outline:none;border-color:var(--accent)}
+#search-close{
+  background:none;border:none;color:var(--text);font-size:24px;
+  cursor:pointer;min-width:44px;min-height:44px;
+}
+/* Messages area */
+#messages{
+  flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;
+  gap:8px;-webkit-overflow-scrolling:touch;
+}
+#load-more{
+  text-align:center;padding:8px;
+}
+#load-more button{
+  background:var(--surface2);border:none;color:var(--text2);
+  font-size:var(--font-small);padding:8px 24px;border-radius:20px;
+  cursor:pointer;min-height:44px;
+}
+.session-divider{
+  text-align:center;color:var(--text2);font-size:var(--font-small);
+  padding:16px 0;border-bottom:1px solid var(--surface2);margin-bottom:8px;
+}
+.bubble{
+  max-width:85%;padding:12px 16px;border-radius:var(--radius);
+  word-wrap:break-word;white-space:pre-wrap;line-height:1.6;
+}
+.bubble.user{align-self:flex-end;background:var(--user-bubble);border-bottom-right-radius:4px}
+.bubble.assistant{align-self:flex-start;background:var(--asst-bubble);border-bottom-left-radius:4px}
+.bubble.streaming{border-left:3px solid var(--accent)}
+.bubble .time{font-size:11px;color:var(--text2);margin-top:4px}
+/* Search results */
+#search-results{
+  display:none;flex:1;overflow-y:auto;padding:16px;flex-direction:column;gap:8px;
+}
+#search-results.active{display:flex}
+.search-hit{
+  background:var(--surface);border-radius:var(--radius);padding:12px 16px;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.search-hit:active{opacity:.7}
+.search-hit .snippet{color:var(--text2);font-size:var(--font-small);margin-top:4px}
+.search-hit .snippet em{color:var(--accent);font-style:normal;font-weight:700}
+/* Install prompt */
+#install-banner{
+  display:none;background:var(--surface2);padding:12px 16px;
+  text-align:center;flex-shrink:0;
+}
+#install-banner.active{display:block}
+#install-banner button{
+  background:var(--accent);border:none;color:#fff;font-size:var(--font-size);
+  padding:10px 24px;border-radius:var(--radius);margin-left:12px;
+  cursor:pointer;min-height:44px;
+}
+/* Input area */
+#input-area{
+  display:flex;padding:8px 12px;padding-bottom:max(8px,env(safe-area-inset-bottom));
+  background:var(--surface);gap:8px;align-items:center;flex-shrink:0;
+}
+#msg-input{
+  flex:1;padding:12px 16px;font-size:var(--font-size);
+  border:2px solid var(--surface2);border-radius:24px;
+  background:var(--bg);color:var(--text);outline:none;
+  min-height:48px;-webkit-appearance:none;
+}
+#msg-input:focus{border-color:var(--accent)}
+#send-btn,#voice-btn{
+  width:48px;height:48px;border:none;border-radius:50%;
+  font-size:24px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;-webkit-tap-highlight-color:transparent;
+}
+#send-btn{background:var(--accent);color:#fff}
+#send-btn:active{opacity:.8}
+#voice-btn{background:var(--surface2);color:var(--text);font-size:22px}
+#voice-btn.listening{background:var(--red);animation:pulse .8s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+/* Toast */
+#toast{
+  position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+  background:var(--accent);color:#fff;padding:10px 24px;border-radius:24px;
+  font-size:var(--font-small);opacity:0;transition:opacity .3s;z-index:10;
+  pointer-events:none;
+}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+
+<!-- Auth Screen -->
+<div id="auth-screen">
+  <h1>📱</h1>
+  <p>欢迎使用 Hermes 助手<br>请输入密码开始</p>
+  <input type="password" id="auth-password" placeholder="密码" autocomplete="current-password" enterkeyhint="go">
+  <button id="auth-btn">进入</button>
+  <div id="auth-error"></div>
+</div>
+
+<!-- Chat Screen -->
+<div id="chat-screen">
+  <div id="topbar">
+    <span class="title">Hermes 助手</span>
+    <div style="display:flex;align-items:center;gap:8px">
+      <button id="search-toggle" title="搜索">🔍</button>
+      <div id="conn-dot"></div>
+    </div>
+  </div>
+
+  <div id="search-bar">
+    <input type="search" id="search-input" placeholder="搜索对话..." enterkeyhint="search">
+    <button id="search-close">✕</button>
+  </div>
+
+  <div id="messages"></div>
+  <div id="search-results"></div>
+
+  <div id="install-banner">
+    添加到主屏幕，随时随地使用
+    <button id="install-btn">安装</button>
+  </div>
+
+  <div id="input-area">
+    <button id="voice-btn" title="语音输入">🎤</button>
+    <input type="text" id="msg-input" placeholder="输入消息..." enterkeyhint="send" autocomplete="off">
+    <button id="send-btn">➤</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── State ──
+let ws = null;
+let authenticated = false;
+let messages = [];
+let streamingMsgId = null;
+let streamingEl = null;
+let oldestMsgId = null;
+let currentSessionId = null;
+let reconnectTimer = null;
+let installPrompt = null;
+
+// ── DOM refs ──
+const $authScreen = id('auth-screen');
+const $chatScreen = id('chat-screen');
+const $authPw = id('auth-password');
+const $authBtn = id('auth-btn');
+const $authError = id('auth-error');
+const $connDot = id('conn-dot');
+const $messages = id('messages');
+const $searchResults = id('search-results');
+const $searchBar = id('search-bar');
+const $searchInput = id('search-input');
+const $searchToggle = id('search-toggle');
+const $searchClose = id('search-close');
+const $msgInput = id('msg-input');
+const $sendBtn = id('send-btn');
+const $voiceBtn = id('voice-btn');
+const $installBanner = id('install-banner');
+const $installBtn = id('install-btn');
+const $toast = id('toast');
+
+function id(s) { return document.getElementById(s); }
+
+// ── Auth ──
+$authBtn.addEventListener('click', doAuth);
+$authPw.addEventListener('keydown', e => { if (e.key === 'Enter') doAuth(); });
+
+function doAuth() {
+  const pw = $authPw.value.trim();
+  if (!pw) return;
+  $authError.textContent = '';
+  $authBtn.disabled = true;
+  $authBtn.textContent = '连接中...';
+  connect(pw);
+}
+
+// ── WebSocket ──
+function connect(password) {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = proto + '//' + location.host + '/ws';
+
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'auth', password: password }));
+  };
+  ws.onmessage = e => handleMessage(JSON.parse(e.data));
+  ws.onclose = () => {
+    if (authenticated) {
+      setConnected(false);
+      reconnectTimer = setTimeout(() => connect(password), 2000);
+    } else {
+      $authError.textContent = '连接失败，请重试';
+      $authBtn.disabled = false;
+      $authBtn.textContent = '进入';
+    }
+  };
+  ws.onerror = () => {};
+}
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'auth_ok':
+      authenticated = true;
+      $authScreen.style.display = 'none';
+      $chatScreen.style.display = 'flex';
+      setConnected(true);
+      break;
+    case 'auth_fail':
+      $authError.textContent = '密码错误';
+      $authBtn.disabled = false;
+      $authBtn.textContent = '进入';
+      if (ws) ws.close();
+      break;
+    case 'ready':
+      messages = msg.messages || [];
+      renderMessages();
+      if (msg.streaming) {
+        resumeStreaming(msg.streaming.msg_id, msg.streaming.text_so_far);
+      }
+      break;
+    case 'session_info':
+      currentSessionId = msg.session_id;
+      addSessionDivider('新的对话');
+      break;
+    case 'stream_start':
+      streamingMsgId = msg.msg_id;
+      streamingEl = addBubble('assistant', '', true);
+      break;
+    case 'stream_delta':
+      if (streamingEl && msg.msg_id === streamingMsgId) {
+        streamingEl.textContent += msg.token;
+        scrollBottom();
+      }
+      break;
+    case 'stream_done':
+      if (streamingEl && msg.msg_id === streamingMsgId) {
+        streamingEl.textContent = msg.full_text;
+        streamingEl.classList.remove('streaming');
+        messages.push({ role: 'assistant', text: msg.full_text });
+        streamingMsgId = null;
+        streamingEl = null;
+      }
+      break;
+    case 'search_results':
+      showSearchResults(msg.results || []);
+      break;
+    case 'history':
+      prependHistory(msg.messages || [], msg.has_more);
+      break;
+    case 'sessions':
+      // Could render a session picker; for now just log.
+      console.log('Sessions:', msg.sessions);
+      break;
+    case 'status':
+      setConnected(msg.connected);
+      break;
+    case 'error':
+      toast(msg.message || '出错了');
+      break;
+  }
+}
+
+// ── Connection UI ──
+function setConnected(on) {
+  $connDot.className = on ? 'on' : '';
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+}
+
+// ── Render ──
+function renderMessages() {
+  $messages.innerHTML = '';
+  messages.forEach(m => addBubble(m.role, m.text, false));
+  scrollBottom();
+  updateOldest();
+}
+
+function addBubble(role, text, streaming) {
+  const div = document.createElement('div');
+  div.className = 'bubble ' + role + (streaming ? ' streaming' : '');
+  div.textContent = text;
+  $messages.appendChild(div);
+  return div;
+}
+
+function addSessionDivider(label) {
+  const div = document.createElement('div');
+  div.className = 'session-divider';
+  div.textContent = '── ' + label + ' ──';
+  $messages.appendChild(div);
+}
+
+function resumeStreaming(msgId, textSoFar) {
+  streamingMsgId = msgId;
+  streamingEl = addBubble('assistant', textSoFar, true);
+  scrollBottom();
+}
+
+function prependHistory(newMsgs, hasMore) {
+  const wasAtBottom = isAtBottom();
+  const scrollTop = $messages.scrollTop;
+  const oldHeight = $messages.scrollHeight;
+
+  const frag = document.createDocumentFragment();
+  newMsgs.forEach(m => {
+    const div = document.createElement('div');
+    div.className = 'bubble ' + (m.role || 'unknown');
+    div.textContent = m.text || '';
+    frag.prepend(div);
+  });
+  $messages.prepend(frag);
+
+  // Maintain scroll position
+  if (!wasAtBottom) {
+    const newHeight = $messages.scrollHeight;
+    $messages.scrollTop = scrollTop + (newHeight - oldHeight);
+  }
+
+  // Update load-more button
+  updateLoadMore(hasMore, newMsgs);
+}
+
+function updateLoadMore(hasMore, newMsgs) {
+  let btn = id('load-more-btn');
+  if (hasMore || newMsgs.length === 0) {
+    // Remove old button
+    const old = id('load-more-wrap');
+    if (old) old.remove();
+
+    if (hasMore) {
+      const wrap = document.createElement('div');
+      wrap.id = 'load-more-wrap';
+      wrap.innerHTML = '<button id="load-more-btn">加载更早的消息</button>';
+      $messages.prepend(wrap);
+      id('load-more-btn').addEventListener('click', () => {
+        if (oldestMsgId) {
+          ws.send(JSON.stringify({
+            type: 'load_history',
+            before_msg_id: oldestMsgId,
+            limit: 20,
+          }));
+        }
+      });
+    }
+  }
+  updateOldest();
+}
+
+function updateOldest() {
+  const bubbles = $messages.querySelectorAll('.bubble');
+  const first = messages[0];
+  oldestMsgId = first ? first.msg_id || first.id : null;
+}
+
+// ── Search ──
+$searchToggle.addEventListener('click', () => {
+  $searchBar.classList.toggle('active');
+  $searchResults.classList.toggle('active');
+  $messages.style.display = $searchBar.classList.contains('active') ? 'none' : '';
+  if ($searchBar.classList.contains('active')) {
+    $searchInput.focus();
+  } else {
+    $searchResults.innerHTML = '';
+    $searchInput.value = '';
+  }
+});
+
+$searchClose.addEventListener('click', () => $searchToggle.click());
+
+$searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const q = $searchInput.value.trim();
+    if (q && ws) {
+      ws.send(JSON.stringify({ type: 'search', query: q }));
+    }
+  }
+});
+
+function showSearchResults(results) {
+  $searchResults.innerHTML = '';
+  if (!results.length) {
+    $searchResults.innerHTML = '<div style="text-align:center;color:var(--text2);padding:32px">没有找到结果</div>';
+    return;
+  }
+  results.forEach(r => {
+    const div = document.createElement('div');
+    div.className = 'search-hit';
+    const role = r.role === 'user' ? '你' : 'Hermes';
+    div.innerHTML =
+      '<strong>' + role + '</strong>' +
+      '<div class="snippet">' + (r.snippet || (r.text||'').substring(0,100)) + '</div>';
+    div.addEventListener('click', () => {
+      if (r.msg_id && ws) {
+        ws.send(JSON.stringify({
+          type: 'load_history',
+          around_msg_id: r.msg_id,
+          limit: 10,
+        }));
+        $searchToggle.click(); // Close search
+      }
+    });
+    $searchResults.appendChild(div);
+  });
+}
+
+// ── Send message ──
+$sendBtn.addEventListener('click', sendMessage);
+$msgInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+function sendMessage() {
+  const text = $msgInput.value.trim();
+  if (!text || !ws) return;
+
+  ws.send(JSON.stringify({ type: 'message', text: text }));
+  addBubble('user', text, false);
+  messages.push({ role: 'user', text: text });
+  $msgInput.value = '';
+  scrollBottom();
+}
+
+// ── Voice input ──
+let recognition = null;
+if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SR();
+  recognition.lang = 'zh-CN';
+  recognition.continuous = false;
+  recognition.interimResults = false;
+
+  recognition.onresult = e => {
+    const text = e.results[0][0].transcript;
+    $msgInput.value = text;
+    $msgInput.focus();
+  };
+  recognition.onend = () => $voiceBtn.classList.remove('listening');
+  recognition.onerror = () => $voiceBtn.classList.remove('listening');
+
+  $voiceBtn.style.display = 'flex';
+  $voiceBtn.addEventListener('click', () => {
+    if ($voiceBtn.classList.contains('listening')) {
+      recognition.stop();
+    } else {
+      try {
+        recognition.start();
+        $voiceBtn.classList.add('listening');
+      } catch (ex) {
+        toast('语音输入暂不可用');
+      }
+    }
+  });
+} else {
+  $voiceBtn.style.display = 'none';
+}
+
+// ── PWA install ──
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  installPrompt = e;
+  $installBanner.classList.add('active');
+});
+
+$installBtn.addEventListener('click', () => {
+  if (installPrompt) {
+    installPrompt.prompt();
+    installPrompt.userChoice.then(() => {
+      $installBanner.classList.remove('active');
+      installPrompt = null;
+    });
+  }
+});
+
+// ── Scroll ──
+function scrollBottom() {
+  requestAnimationFrame(() => {
+    $messages.scrollTop = $messages.scrollHeight;
+  });
+}
+
+function isAtBottom() {
+  return $messages.scrollHeight - $messages.scrollTop - $messages.clientHeight < 60;
+}
+
+// Listen for scroll to top to load more history.
+$messages.addEventListener('scroll', () => {
+  if ($messages.scrollTop < 40 && oldestMsgId && ws && authenticated) {
+    ws.send(JSON.stringify({
+      type: 'load_history',
+      before_msg_id: oldestMsgId,
+      limit: 20,
+    }));
+  }
+});
+
+// ── Toast ──
+function toast(text) {
+  $toast.textContent = text;
+  $toast.classList.add('show');
+  setTimeout(() => $toast.classList.remove('show'), 2000);
+}
+
+// ── Service Worker ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
+}
+</script>
+</body>
+</html>
