@@ -628,8 +628,11 @@
       })
 
       # ── User / group ──────────────────────────────────────────────────
+      # Always declare the group — activation scripts and systemd
+      # Group= depend on it even when createUser = false.
+      users.groups.${cfg.group} = { };
+
       (lib.mkIf cfg.createUser {
-        users.groups.${cfg.group} = { };
         users.users.${cfg.user} = {
           isSystemUser = true;
           group = cfg.group;
