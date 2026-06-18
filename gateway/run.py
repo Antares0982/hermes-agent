@@ -3462,13 +3462,25 @@ class GatewayRunner:
 
                     def _on_steer_delivered(steer_text: str) -> None:
                         preview = steer_text[:80] + ("..." if len(steer_text) > 80 else "")
-                        asyncio.ensure_future(
-                            _adapter_ref._send_with_retry(
-                                chat_id=_chat_id,
-                                content=f"✅ Steer delivered ({len(steer_text)} chars): {preview}",
-                                reply_to=_msg_id,
-                            )
+                        coro = _adapter_ref._send_with_retry(
+                            chat_id=_chat_id,
+                            content=f"✅ Steer delivered ({len(steer_text)} chars): {preview}",
+                            reply_to=_msg_id,
                         )
+                        try:
+                            loop = asyncio.get_running_loop()
+                            loop.create_task(coro)
+                        except RuntimeError:
+                            # Called from agent thread (no running event loop).
+                            # Schedule on the gateway's event loop.
+                            gw_loop = getattr(self, "_gateway_loop", None)
+                            if gw_loop is not None:
+                                asyncio.run_coroutine_threadsafe(coro, gw_loop)
+                            else:
+                                logger.warning(
+                                    "Steer delivery confirmation dropped: "
+                                    "no event loop available"
+                                )
 
                     steered = bool(running_agent.steer(steer_text, on_delivered=_on_steer_delivered))
                 except Exception as exc:
