@@ -1,0 +1,22 @@
+name: pwa-platform
+label: PWA Mobile
+kind: platform
+version: 0.1.0
+description: >
+  WebSocket-based PWA client for mobile AI assistant.
+  Provides a single-user password-authenticated WebSocket server
+  that a PWA (Progressive Web App) frontend connects to via WSS.
+requires_env:
+  - name: PWA_PASSWORD
+    description: "Password for PWA client authentication (10+ characters recommended)"
+    prompt: "PWA password"
+    password: true
+optional_env:
+  - name: PWA_WS_HOST
+    description: "WebSocket listen host (default: 127.0.0.1 — only localhost, nginx proxies WSS)"
+    prompt: "WS host"
+    password: false
+  - name: PWA_WS_PORT
+    description: "WebSocket listen port (default: 61234)"
+    prompt: "WS port"
+    password: false
