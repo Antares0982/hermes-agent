@@ -324,9 +324,9 @@ def compress_context(
         f"{approx_tokens:,}" if approx_tokens else "unknown", agent.model,
         focus_topic,
     )
-    agent._emit_status(
-        "🗜️ Compacting context — summarizing earlier conversation so I can continue..."
-    )
+    _start_msg = "🗜️ Compacting context — summarizing earlier conversation so I can continue..."
+    agent._emit_status(_start_msg)
+    logger.warning(_start_msg)
 
     # ── Compression lock ────────────────────────────────────────────────
     # Atomic, state.db-backed lock per session_id.  Without this, two
@@ -453,11 +453,13 @@ def compress_context(
         _err = getattr(agent.context_compressor, "_last_summary_error", None) or "unknown error"
         if getattr(agent, "_last_compression_summary_warning", None) != _err:
             agent._last_compression_summary_warning = _err
-            agent._emit_warning(
+            _abort_msg = (
                 f"⚠ Compression aborted: {_err}. "
                 "No messages were dropped — conversation continues unchanged. "
                 "Run /compress to retry, or /new to start a fresh session."
             )
+            agent._emit_warning(_abort_msg)
+            logger.warning(_abort_msg)
         _existing_sp = getattr(agent, "_cached_system_prompt", None)
         if not _existing_sp:
             _existing_sp = agent._build_system_prompt(system_message)
@@ -468,10 +470,12 @@ def compress_context(
     if summary_error:
         if getattr(agent, "_last_compression_summary_warning", None) != summary_error:
             agent._last_compression_summary_warning = summary_error
-            agent._emit_warning(
+            _sumfail_msg = (
                 f"⚠ Compression summary failed: {summary_error}. "
                 "Inserted a fallback context marker."
             )
+            agent._emit_warning(_sumfail_msg)
+            logger.warning(_sumfail_msg)
     else:
         # No hard failure — but did the configured aux model error out
         # and get recovered by retrying on main?  Surface that so users
@@ -484,11 +488,13 @@ def compress_context(
             _aux_key = (_aux_fail_model, _aux_fail_err)
             if getattr(agent, "_last_aux_fallback_warning_key", None) != _aux_key:
                 agent._last_aux_fallback_warning_key = _aux_key
-                agent._emit_warning(
+                _auxfb_msg = (
                     f"ℹ Configured compression model '{_aux_fail_model}' failed "
                     f"({_aux_fail_err or 'unknown error'}). Recovered using main model — "
                     "check auxiliary.compression.model in config.yaml."
                 )
+                agent._emit_warning(_auxfb_msg)
+                logger.warning(_auxfb_msg)
 
     todo_snapshot = agent._todo_store.format_for_injection()
     if todo_snapshot:
@@ -612,14 +618,16 @@ def compress_context(
     _post_msg_count = len(compressed)
     _before_tokens = approx_tokens or 0
     if _before_tokens > 0:
-        agent._emit_status(
+        _done_msg = (
             f"🗜️ Compressed: {_pre_msg_count} → {_post_msg_count} messages, "
             f"~{_before_tokens:,} → ~{_compressed_est:,} tokens"
         )
+        agent._emit_status(_done_msg)
+        logger.warning(_done_msg)
     else:
-        agent._emit_status(
-            f"🗜️ Compressed: {_pre_msg_count} → {_post_msg_count} messages"
-        )
+        _done_msg = f"🗜️ Compressed: {_pre_msg_count} → {_post_msg_count} messages"
+        agent._emit_status(_done_msg)
+        logger.warning(_done_msg)
     # Release the lock on the OLD session_id only AFTER rotation completed
     # and all post-rotation bookkeeping (memory manager, context engine,
     # file dedup) ran. A concurrent path that wakes up the moment we
