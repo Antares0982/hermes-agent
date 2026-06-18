@@ -4,11 +4,14 @@ Single-user, password-authenticated WebSocket server that a PWA frontend
 connects to.  The WebSocket server binds to 127.0.0.1 only — nginx proxies
 WSS from the public internet.
 
-Streaming: PWA does NOT use the gateway's draft/edit-based streaming
-(send_draft / edit_message).  Instead, the adapter maintains a reference
-to the active WebSocket and pushes stream deltas directly during
-agent processing.  The adapter's send() delivers the final complete
-message when the agent finishes.
+Streaming: the adapter implements ``edit_message`` so the gateway's
+``GatewayStreamConsumer`` can push deltas during agent processing.
+``send`` delivers the initial chunk (stream_start) or the final response.
+Mid-stream reconnect resumes streaming via the ``ready`` payload.
+
+Message persistence: hot buffer (last 50 messages) kept in memory;
+cold data stored in SessionDB (SQLite FTS5).  ``load_history`` queries
+the DB for scroll-up and search-anchored history.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -33,8 +37,10 @@ from gateway.config import Platform, PlatformConfig
 from .protocol import (
     auth_fail,
     auth_ok,
+    history as _history_msg,
     ready,
     search_results,
+    session_info,
     stream_delta,
     stream_done,
     stream_start,
@@ -42,6 +48,15 @@ from .protocol import (
 )
 
 logger = logging.getLogger("hermes.gateway.platforms.pwa")
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+HOT_BUFFER_SIZE = 50
+SESSION_SPLIT_SECONDS = 6 * 3600  # 6 hours
+PWA_CHAT_ID = "pwa"
+PWA_USER_ID = "pwa-user"
 
 # ---------------------------------------------------------------------------
 # Dependency check
@@ -76,7 +91,6 @@ def is_connected() -> bool:
 
 _instance: Optional["PWAAdapter"] = None
 
-
 # ---------------------------------------------------------------------------
 # Adapter
 # ---------------------------------------------------------------------------
@@ -86,10 +100,6 @@ class PWAAdapter(BasePlatformAdapter):
     """WebSocket server adapter for PWA mobile client."""
 
     def __init__(self, config: PlatformConfig) -> None:
-        # The PWA platform isn't in upstream's Platform enum, so we
-        # construct a Platform value dynamically.  Platform._missing_()
-        # (in gateway/config.py) creates member values on the fly for
-        # plugin-registered platform names.
         platform = Platform("pwa")
         super().__init__(config, platform)
 
@@ -103,20 +113,104 @@ class PWAAdapter(BasePlatformAdapter):
         # Single-user: one active WebSocket at a time.
         self._ws: Optional[Any] = None
         self._ws_server: Optional[Any] = None
-        self._ws_server_task: Optional[asyncio.Task] = None
         self._authenticated = False
 
-        # In-memory hot buffer: last 50 messages (mirrors the design doc
-        # data-layering scheme).  Keyed by (message_id, role, text, timestamp).
+        # In-memory hot buffer: last N messages.
         self._hot_messages: list[dict[str, Any]] = []
 
-        # Track the currently-streaming message so we can resume if the
-        # client disconnects mid-stream and reconnects.
+        # Track the currently-streaming message for mid-stream reconnect.
         self._streaming_msg_id: Optional[str] = None
         self._streaming_text: str = ""
 
+        # Current session tracking (6h auto-split).
+        self._current_session_id: str = ""
+        self._last_message_time: float = 0.0
+
+        # SessionDB (lazy init to keep adapter construction light).
+        self._session_db: Optional[Any] = None
+
         global _instance
         _instance = self
+
+    # ------------------------------------------------------------------
+    # SessionDB access
+    # ------------------------------------------------------------------
+
+    def _get_session_db(self):
+        """Lazy-init SessionDB, sharing the same state.db as the gateway."""
+        if self._session_db is None:
+            try:
+                from hermes_state import SessionDB
+                self._session_db = SessionDB()
+            except Exception:
+                logger.exception("Failed to open SessionDB for PWA")
+        return self._session_db
+
+    def _get_or_create_session(self) -> str:
+        """Return the current session id, creating one if needed.
+
+        If >6h elapsed since the last message, create a new session.
+        """
+        db = self._get_session_db()
+        now = time.time()
+
+        if (
+            self._current_session_id
+            and self._last_message_time > 0
+            and (now - self._last_message_time) <= SESSION_SPLIT_SECONDS
+        ):
+            return self._current_session_id
+
+        # New session needed.
+        new_id = str(uuid.uuid4())[:8]
+        self._current_session_id = new_id
+        self._last_message_time = now
+
+        if db:
+            try:
+                db.create_session(
+                    new_id,
+                    source="pwa",
+                    chat_type="pwa",
+                    platform="pwa",
+                )
+            except Exception:
+                logger.exception("Failed to create session in SessionDB")
+
+        # Notify client of new session.
+        if self._ws and self._authenticated:
+            try:
+                asyncio.create_task(
+                    self._ws.send(session_info(new_id, now))
+                )
+            except Exception:
+                pass
+
+        return new_id
+
+    def _persist_message(self, role: str, text: str) -> None:
+        """Write a message to SessionDB (cold data)."""
+        db = self._get_session_db()
+        if not db or not self._current_session_id:
+            return
+        try:
+            db.append_message(
+                session_id=self._current_session_id,
+                role=role,
+                content=text,
+            )
+        except Exception:
+            logger.exception("Failed to persist message to SessionDB")
+
+    def _append_hot(self, role: str, text: str) -> None:
+        """Append a message to the in-memory hot buffer, trimming to size."""
+        self._hot_messages.append({
+            "role": role,
+            "text": text,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        if len(self._hot_messages) > HOT_BUFFER_SIZE:
+            self._hot_messages = self._hot_messages[-HOT_BUFFER_SIZE:]
 
     @property
     def enforces_own_access_policy(self) -> bool:
@@ -128,12 +222,7 @@ class PWAAdapter(BasePlatformAdapter):
     # ------------------------------------------------------------------
 
     async def connect(self) -> bool:
-        """Start the WebSocket server on the gateway's asyncio event loop.
-
-        Important (pitfall #1 from design doc): do NOT create a separate
-        event loop.  websockets.serve() must run inside the gateway's
-        existing asyncio loop.
-        """
+        """Start the WebSocket server on the gateway's asyncio event loop."""
         if not check_requirements():
             return False
 
@@ -159,7 +248,6 @@ class PWAAdapter(BasePlatformAdapter):
         """Stop the WebSocket server and close any active connection."""
         self._running = False
 
-        # Close active client connection.
         if self._ws is not None:
             try:
                 await self._ws.close()
@@ -167,10 +255,8 @@ class PWAAdapter(BasePlatformAdapter):
                 pass
             self._ws = None
 
-        # Close the server.
         if self._ws_server is not None:
             self._ws_server.close()
-            # Wait for the server to finish closing.
             try:
                 await asyncio.wait_for(self._ws_server.wait_closed(), timeout=5.0)
             except (asyncio.TimeoutError, Exception):
@@ -187,32 +273,113 @@ class PWAAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
-        """Send a message to the connected PWA client."""
+        """Send a message to the connected PWA client.
+
+        Called by the gateway in two scenarios:
+        1. During streaming: the stream consumer's first send (new message).
+           We start a streaming session and return the msg_id for editing.
+        2. Standalone / final: we deliver stream_done or a complete message.
+        """
         if not self._ws or not self._authenticated:
             return SendResult(success=False, error="No authenticated client connected")
 
-        # When called as a final send after streaming, this is the
-        # stream_done message.  When called without prior streaming,
-        # this is a standalone response.
-        if self._streaming_msg_id is not None:
-            msg = stream_done(self._streaming_msg_id, content)
-            self._streaming_msg_id = None
-            self._streaming_text = ""
-        else:
-            # Standalone (non-streaming) response.
+        # If we're in an active streaming session, this is the first
+        # send from the stream consumer (creating a new message to edit).
+        # Otherwise it's a standalone / final response.
+        if self._streaming_msg_id is None:
+            # Start a new streaming session.
             msg_id = str(int(time.time() * 1000))
-            msg = stream_done(msg_id, content)
+            self._streaming_msg_id = msg_id
+            self._streaming_text = ""
+
+            try:
+                await self._ws.send(stream_start(msg_id))
+                if content:
+                    self._streaming_text = content
+                    await self._ws.send(stream_delta(msg_id, content))
+            except ConnectionClosed:
+                self._streaming_msg_id = None
+                self._streaming_text = ""
+                self._ws = None
+                self._authenticated = False
+                return SendResult(success=False, error="WebSocket closed")
+
+            return SendResult(success=True, message_id=msg_id)
+
+        # We have an active streaming session — this is a second call to
+        # send() (the gateway's fallback delivery after streaming).
+        # Finalize the stream.
+        msg_id = self._streaming_msg_id
+        self._streaming_msg_id = None
+        self._streaming_text = ""
 
         try:
-            await self._ws.send(msg)
-            return SendResult(success=True)
+            await self._ws.send(stream_done(msg_id, content or ""))
         except ConnectionClosed:
             self._ws = None
             self._authenticated = False
             return SendResult(success=False, error="WebSocket closed")
 
+        # Persist assistant response.
+        self._append_hot("assistant", content or "")
+        self._persist_message("assistant", content or "")
+
+        return SendResult(success=True, message_id=msg_id)
+
+    async def edit_message(
+        self,
+        chat_id: str,
+        message_id: str,
+        content: str,
+        *,
+        finalize: bool = False,
+    ) -> SendResult:
+        """Push a streaming delta to the PWA client.
+
+        Called repeatedly by the gateway's GatewayStreamConsumer during
+        agent processing.  ``finalize=True`` on the last edit signals the
+        stream is complete — we send stream_done.
+        """
+        if not self._ws or not self._authenticated:
+            return SendResult(success=False, error="No authenticated client connected")
+
+        if finalize:
+            # Stream complete — send stream_done.
+            msg_id = self._streaming_msg_id or message_id
+            self._streaming_msg_id = None
+            self._streaming_text = ""
+
+            try:
+                await self._ws.send(stream_done(msg_id, content or ""))
+            except ConnectionClosed:
+                self._ws = None
+                self._authenticated = False
+                return SendResult(success=False, error="WebSocket closed")
+
+            # Persist the completed response.
+            self._append_hot("assistant", content or "")
+            self._persist_message("assistant", content or "")
+            return SendResult(success=True)
+
+        # Streaming delta.
+        if content and self._streaming_msg_id:
+            delta = content[len(self._streaming_text):]
+            if delta:
+                self._streaming_text = content
+                try:
+                    await self._ws.send(
+                        stream_delta(self._streaming_msg_id, delta)
+                    )
+                except ConnectionClosed:
+                    self._streaming_text = ""
+                    self._ws = None
+                    self._authenticated = False
+                    return SendResult(success=False, error="WebSocket closed")
+
+        return SendResult(success=True)
+
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
-        return {"name": "PWA Mobile", "type": "dm", "chat_id": "pwa"}
+        return {"name": "PWA Mobile", "type": "dm", "chat_id": PWA_CHAT_ID}
 
     # ------------------------------------------------------------------
     # Authentication
@@ -235,8 +402,12 @@ class PWAAdapter(BasePlatformAdapter):
         logger.info("PWA client authenticated")
         await ws.send(auth_ok())
 
-        # Send current state: ready with hot message buffer.
-        await ws.send(ready(self._hot_messages))
+        # Send current state with hot buffer + mid-stream info.
+        await ws.send(ready(
+            self._hot_messages,
+            streaming_msg_id=self._streaming_msg_id,
+            streaming_text=self._streaming_text,
+        ))
         self._authenticated = True
         return True
 
@@ -248,8 +419,6 @@ class PWAAdapter(BasePlatformAdapter):
         """Handle a single WebSocket connection lifecycle.
 
         Only one client is allowed at a time (single-user design).
-        If a new client connects while one is active, the old one is
-        closed.
         """
         peer = ws.remote_address
         logger.info("PWA WebSocket connection from %s", peer)
@@ -315,8 +484,14 @@ class PWAAdapter(BasePlatformAdapter):
             await self._handle_load_history(
                 data.get("before_msg_id"),
                 data.get("around_msg_id"),
-                data.get("limit", 20),
+                int(data.get("limit", 20)),
             )
+
+        elif msg_type == "load_sessions":
+            if not self._authenticated:
+                await ws.send(json.dumps({"type": "error", "message": "Not authenticated"}))
+                return
+            await self._handle_load_sessions()
 
         else:
             logger.debug("PWA unknown message type: %s", msg_type)
@@ -330,12 +505,15 @@ class PWAAdapter(BasePlatformAdapter):
         if not text.strip():
             return
 
+        # 6h session auto-split.
+        self._get_or_create_session()
+
         source = SessionSource(
             platform=self.platform,
-            chat_id="pwa",
+            chat_id=PWA_CHAT_ID,
             chat_name="PWA Mobile",
             chat_type="dm",
-            user_id="pwa-user",
+            user_id=PWA_USER_ID,
             user_name="User",
         )
 
@@ -347,43 +525,70 @@ class PWAAdapter(BasePlatformAdapter):
             timestamp=datetime.now(timezone.utc),
         )
 
-        # Store user message in hot buffer.
-        self._hot_messages.append({
-            "role": "user",
-            "text": text.strip(),
-            "timestamp": event.timestamp.isoformat(),
-        })
-        if len(self._hot_messages) > 50:
-            self._hot_messages = self._hot_messages[-50:]
+        # Persist user message.
+        self._append_hot("user", text.strip())
+        self._persist_message("user", text.strip())
 
-        # The gateway will call back into adapter.send() when the agent
-        # produces a response.  The base class stores the final response
-        # in the hot buffer via _add_assistant_message() which we need
-        # to hook.
+        # Route to agent — adapter.send() / edit_message() will be called
+        # during processing for streaming, then send() for the final response.
         await self.handle_message(event)
 
-    async def _handle_search(self, query: str) -> None:
-        """Search messages using the gateway's SessionDB (FTS5).
+    # ------------------------------------------------------------------
+    # Search (FTS5)
+    # ------------------------------------------------------------------
 
-        For now this is a stub — full search implementation requires
-        access to the SessionDB which the adapter gets via the gateway
-        context.
-        """
-        if not query.strip():
-            return
+    async def _handle_search(self, query: str) -> None:
+        """Search messages using SessionDB FTS5."""
         ws = self._ws
         if ws is None:
             return
 
-        # TODO: wire SessionDB access through gateway hooks.
-        # For now, search only the in-memory hot buffer.
+        if not query.strip():
+            await ws.send(search_results([]))
+            return
+
+        db = self._get_session_db()
         results: list[dict[str, Any]] = []
+
+        if db:
+            try:
+                # FTS5 search across all sessions.
+                db_results = db.search_messages(
+                    query.strip(),
+                    source_filter=["pwa"],
+                    limit=20,
+                    sort="newest",
+                )
+                for row in db_results:
+                    results.append({
+                        "msg_id": row.get("id"),
+                        "session_id": row.get("session_id"),
+                        "role": row.get("role"),
+                        "snippet": row.get("snippet", ""),
+                        "text": row.get("content", "")[:200],
+                        "timestamp": row.get("timestamp"),
+                    })
+            except Exception:
+                logger.exception("FTS5 search failed")
+
+        # Fallback: also search hot buffer.
         q = query.lower()
+        hot_ids = {r.get("msg_id") for r in results}
         for msg in self._hot_messages:
             if q in msg.get("text", "").lower():
-                results.append(msg)
+                results.append({
+                    "role": msg["role"],
+                    "snippet": msg["text"][:200],
+                    "text": msg["text"][:200],
+                    "timestamp": msg.get("timestamp"),
+                    "hot": True,
+                })
 
         await ws.send(search_results(results))
+
+    # ------------------------------------------------------------------
+    # History loading
+    # ------------------------------------------------------------------
 
     async def _handle_load_history(
         self,
@@ -391,41 +596,120 @@ class PWAAdapter(BasePlatformAdapter):
         around_msg_id: Optional[str],
         limit: int,
     ) -> None:
-        """Load history from hot buffer. SessionDB cold-data loading
-        will be added when the SessionDB access hook is available.
-        """
+        """Load history from SessionDB (cold data) or hot buffer."""
         ws = self._ws
         if ws is None:
             return
 
-        # For now, return the hot buffer.
+        # limit sanity
+        limit = max(1, min(limit, 100))
+
+        if around_msg_id:
+            # Anchored load (search result click).
+            db = self._get_session_db()
+            if db:
+                try:
+                    # Try to resolve the anchor message.
+                    # We don't know the session_id, so try current session first.
+                    sess = self._current_session_id
+                    if sess:
+                        try:
+                            msg_id_int = int(around_msg_id)
+                            window = db.get_messages_around(sess, msg_id_int, limit)
+                            if window and window.get("window"):
+                                msgs = window["window"]
+                                await ws.send(_history_msg(
+                                    [self._db_row_to_msg(r) for r in msgs],
+                                    has_more=(window.get("messages_before", 0) >= limit),
+                                ))
+                                return
+                        except (ValueError, TypeError, Exception):
+                            pass
+                except Exception:
+                    logger.exception("Failed anchored history load")
+            await ws.send(_history_msg([], has_more=False))
+            return
+
+        if before_msg_id:
+            # Scrolling up: load messages older than before_msg_id.
+            db = self._get_session_db()
+            if db and self._current_session_id:
+                try:
+                    all_msgs = db.get_messages(self._current_session_id)
+                    # Find messages before the anchor.
+                    before_idx = None
+                    for i, m in enumerate(all_msgs):
+                        if str(m.get("id")) == str(before_msg_id):
+                            before_idx = i
+                            break
+                    if before_idx is not None and before_idx > 0:
+                        start = max(0, before_idx - limit)
+                        chunk = all_msgs[start:before_idx]
+                        await ws.send(_history_msg(
+                            [self._db_row_to_msg(r) for r in chunk],
+                            has_more=(start > 0),
+                        ))
+                        return
+                except Exception:
+                    logger.exception("Failed history load")
+            await ws.send(_history_msg([], has_more=False))
+            return
+
+        # No pagination: return hot buffer.
+        await ws.send(_history_msg(
+            list(self._hot_messages),
+            has_more=False,
+        ))
+
+    async def _handle_load_sessions(self) -> None:
+        """Return a list of past sessions for the client."""
+        ws = self._ws
+        if ws is None:
+            return
+
+        db = self._get_session_db()
+        sessions: list[dict[str, Any]] = []
+        if db:
+            try:
+                from hermes_state import SessionDB
+                # Query sessions with source=pwa.
+                with db._lock:
+                    rows = db._conn.execute(
+                        "SELECT id, started_at, message_count, source "
+                        "FROM sessions WHERE source = ? "
+                        "ORDER BY started_at DESC LIMIT 50",
+                        ("pwa",),
+                    ).fetchall()
+                for row in rows:
+                    sessions.append({
+                        "session_id": row["id"],
+                        "started_at": row["started_at"],
+                        "message_count": row["message_count"],
+                    })
+            except Exception:
+                logger.exception("Failed to load sessions")
+
         await ws.send(json.dumps({
-            "type": "history",
-            "messages": self._hot_messages[-limit:] if limit > 0 else self._hot_messages,
+            "type": "sessions",
+            "sessions": sessions,
+            "current": self._current_session_id,
         }))
 
     # ------------------------------------------------------------------
-    # Streaming (stub — Phase 8)
+    # Helpers
     # ------------------------------------------------------------------
 
-    async def _on_stream_delta(self, text: str) -> None:
-        """Called by the gateway stream consumer to push a token to PWA."""
-        ws = self._ws
-        if ws is None or not self._authenticated:
-            return
-
-        if self._streaming_msg_id is None:
-            self._streaming_msg_id = str(int(time.time() * 1000))
-            self._streaming_text = ""
-            await ws.send(stream_start(self._streaming_msg_id))
-
-        self._streaming_text += text
-        try:
-            await ws.send(stream_delta(self._streaming_msg_id, text))
-        except ConnectionClosed:
-            self._streaming_text = ""  # Will be recovered on reconnect
-            self._ws = None
-            self._authenticated = False
+    @staticmethod
+    def _db_row_to_msg(row: Any) -> dict[str, Any]:
+        """Convert a SessionDB row to the PWA message format."""
+        msg = dict(row) if not isinstance(row, dict) else row
+        return {
+            "role": msg.get("role", "unknown"),
+            "text": msg.get("content", "") or "",
+            "timestamp": msg.get("timestamp", ""),
+            "msg_id": msg.get("id"),
+            "session_id": msg.get("session_id"),
+        }
 
     # ------------------------------------------------------------------
     # Gateway hooks
@@ -433,15 +717,20 @@ class PWAAdapter(BasePlatformAdapter):
 
     async def _after_turn(self, response_text: str) -> None:
         """Hook called after an agent turn completes.
-        Stashes the assistant message in the hot buffer.
+
+        Stashes the assistant message in the hot buffer and persists to DB.
+        But only if the stream consumer didn't already handle persistence
+        (via edit_message finalize or send fallback).
         """
-        self._hot_messages.append({
-            "role": "assistant",
-            "text": response_text,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-        if len(self._hot_messages) > 50:
-            self._hot_messages = self._hot_messages[-50:]
+        if not response_text:
+            return
+
+        # Check if we already persisted this via streaming.
+        if self._hot_messages and self._hot_messages[-1].get("text") == response_text:
+            return
+
+        self._append_hot("assistant", response_text)
+        self._persist_message("assistant", response_text)
 
 
 # ---------------------------------------------------------------------------
