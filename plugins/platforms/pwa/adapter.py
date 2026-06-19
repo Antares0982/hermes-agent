@@ -171,11 +171,11 @@ class PWAAdapter(BasePlatformAdapter):
                 db.create_session(
                     new_id,
                     source="pwa",
-                    chat_type="pwa",
-                    platform="pwa",
                 )
             except Exception:
                 logger.exception("Failed to create session in SessionDB")
+                self._current_session_id = ""
+                return ""
 
         # Notify client of new session.
         if self._ws and self._authenticated:
