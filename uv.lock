@@ -1639,6 +1639,7 @@ all = [
     { name = "simple-term-menu" },
     { name = "starlette" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
     { name = "youtube-transcript-api" },
 ]
 anthropic = [
@@ -1848,6 +1849,7 @@ requires-dist = [
     { name = "hermes-agent", extras = ["mcp"], marker = "extra == 'termux'" },
     { name = "hermes-agent", extras = ["pty"], marker = "extra == 'all'" },
     { name = "hermes-agent", extras = ["pty"], marker = "extra == 'termux'" },
+    { name = "hermes-agent", extras = ["pwa"], marker = "extra == 'all'" },
     { name = "hermes-agent", extras = ["sms"], marker = "extra == 'all'" },
     { name = "hermes-agent", extras = ["sms"], marker = "extra == 'termux-all'" },
     { name = "hermes-agent", extras = ["termux"], marker = "extra == 'termux-all'" },
