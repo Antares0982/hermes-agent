@@ -1895,9 +1895,18 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
         from hermes_cli.plugins import discover_plugins
         discover_plugins()  # idempotent
         from gateway.platform_registry import platform_registry
-        for entry in platform_registry.plugin_entries():
+        entries = platform_registry.plugin_entries()
+        logger.info(
+            "Plugin platforms discovered: %s",
+            ", ".join(e.name for e in entries) if entries else "(none)",
+        )
+        for entry in entries:
             try:
                 if not entry.check_fn():
+                    logger.warning(
+                        "Plugin platform '%s' skipped: check_fn() returned False",
+                        entry.name,
+                    )
                     continue
             except Exception as e:
                 logger.debug("check_fn for %s raised: %s", entry.name, e)
@@ -1967,9 +1976,8 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
                         )
                         configured = False
                     if not configured:
-                        logger.debug(
-                            "Plugin platform '%s' available but not configured "
-                            "(is_connected returned False) — skipping enable",
+                        logger.warning(
+                            "Plugin platform '%s' skipped: is_connected() returned False",
                             entry.name,
                         )
                         continue
@@ -1999,6 +2007,16 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
                     )
     except Exception as e:
         logger.debug("Plugin platform enable pass failed: %s", e)
+
+    # Diagnostic summary: which platforms are enabled?
+    try:
+        enabled = [
+            p for p, pc in config.platforms.items() if pc.enabled
+        ]
+        if enabled:
+            logger.info("Enabled platforms: %s", ", ".join(p.value for p in enabled))
+    except Exception:
+        pass
 
     for platform_config in config.platforms.values():
         platform_config.extra.pop("_enabled_explicit", None)
