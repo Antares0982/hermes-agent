@@ -84,7 +84,7 @@ def check_requirements() -> bool:
     return True
 
 
-def is_connected() -> bool:
+def is_connected(config: Any = None) -> bool:
     """Return whether PWA credentials are configured."""
     return bool(os.getenv("PWA_PASSWORD"))
 
