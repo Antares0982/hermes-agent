@@ -6,8 +6,13 @@ WSS from the public internet.
 
 Streaming: the adapter implements ``edit_message`` so the gateway's
 ``GatewayStreamConsumer`` can push deltas during agent processing.
-``send`` delivers the initial chunk (stream_start) or the final response.
+``send`` delivers the initial chunk (stream_start) or deltas (post-segment-break).
 Mid-stream reconnect resumes streaming via the ``ready`` payload.
+
+One stream_start → many stream_delta → one stream_done per agent turn.
+Segment breaks (tool boundaries) are transparent — deltas continue on the
+same msg_id.  One-shot messages (command responses like /status) get
+stream_done immediately so the frontend applies markdown rendering.
 
 Message persistence: hot buffer (last 50 messages) kept in memory;
 cold data stored in SessionDB (SQLite FTS5).  ``load_history`` queries
@@ -121,6 +126,18 @@ class PWAAdapter(BasePlatformAdapter):
         self._streaming_msg_id: Optional[str] = None
         self._streaming_text: str = ""
 
+        # True when the previous edit_message(finalize=True) signalled a
+        # segment boundary (tool call break or turn end).  send() reads this
+        # to reset text tracking for a new segment without creating a new
+        # stream_start message (PWA uses ONE stream per turn).
+        self._segment_boundary: bool = False
+
+        # True during agent processing (handle_message → agent turn).
+        # Used to distinguish one-shot command responses (e.g. /status)
+        # from agent streaming.  One-shot messages get stream_done
+        # immediately so the frontend applies markdown rendering.
+        self._in_agent_turn: bool = False
+
         # Current session tracking (6h auto-split).
         self._current_session_id: str = ""
         self._last_message_time: float = 0.0
@@ -130,6 +147,20 @@ class PWAAdapter(BasePlatformAdapter):
 
         global _instance
         _instance = self
+
+    # ------------------------------------------------------------------
+    # Stream state management
+    # ------------------------------------------------------------------
+
+    def _reset_stream(self) -> None:
+        """Clear all streaming state.
+
+        Called on WebSocket disconnect, ConnectionClosed in send/edit_message,
+        and after one-shot messages get their stream_done.
+        """
+        self._streaming_msg_id = None
+        self._streaming_text = ""
+        self._segment_boundary = False
 
     # ------------------------------------------------------------------
     # SessionDB access
@@ -306,10 +337,11 @@ class PWAAdapter(BasePlatformAdapter):
     ) -> SendResult:
         """Send a message to the connected PWA client.
 
-        PWA uses a single streaming message per turn.  The first call
-        starts streaming; subsequent calls (tool-progress from the stream
-        consumer) only accumulate text silently.  The gateway's final
-        delivery sends ``stream_done`` to the client.
+        PWA uses a single streaming message per agent turn.
+        - First call → stream_start + first delta
+        - Subsequent calls during agent turn → push deltas to same msg_id
+        - Segment breaks (post-tool-call) → reset text tracking, continue deltas
+        - One-shot messages (command responses like /status) → stream_done immediately
         """
         if not self._ws or not self._authenticated:
             return SendResult(success=False, error="No authenticated client connected")
@@ -317,9 +349,29 @@ class PWAAdapter(BasePlatformAdapter):
         text = content or ""
 
         if self._streaming_msg_id is not None:
-            # We already have an active streaming session.
-            # Tool-progress / fallback chunks: silently accumulate.
-            self._streaming_text += text
+            # Already in a streaming turn — push delta to current message.
+            if self._segment_boundary:
+                self._segment_boundary = False
+                if text == self._streaming_text:
+                    # Final delivery: text was already shown via prior deltas.
+                    # stream_done will be sent by _handle_user_message.
+                    return SendResult(success=True, message_id=self._streaming_msg_id)
+                # New segment (post-tool-call): reset text tracking so
+                # deltas are computed against the new segment, not the
+                # old one.
+                self._streaming_text = ""
+
+            if text:
+                delta = text[len(self._streaming_text):]
+                if delta:
+                    self._streaming_text = text
+                    try:
+                        await self._ws.send(stream_delta(self._streaming_msg_id, delta))
+                    except ConnectionClosed:
+                        self._reset_stream()
+                        self._ws = None
+                        self._authenticated = False
+                        return SendResult(success=False, error="WebSocket closed")
             return SendResult(success=True, message_id=self._streaming_msg_id)
 
         # First send of this turn — start streaming.
@@ -331,9 +383,13 @@ class PWAAdapter(BasePlatformAdapter):
             await self._ws.send(stream_start(msg_id))
             if text:
                 await self._ws.send(stream_delta(msg_id, text))
+            # One-shot messages (e.g. command responses) complete immediately
+            # so the frontend can apply markdown rendering.
+            if not self._in_agent_turn:
+                await self._ws.send(stream_done(msg_id, text))
+                self._reset_stream()
         except ConnectionClosed:
-            self._streaming_msg_id = None
-            self._streaming_text = ""
+            self._reset_stream()
             self._ws = None
             self._authenticated = False
             return SendResult(success=False, error="WebSocket closed")
@@ -352,9 +408,8 @@ class PWAAdapter(BasePlatformAdapter):
 
         Called repeatedly by the gateway's GatewayStreamConsumer during
         agent processing.  ``finalize=True`` at tool boundaries and at
-        the turn end.  We only close the stream when the gateway delivers
-        the final response via a separate ``send()`` call, so
-        ``finalize=True`` here is a no-op — it just keeps accumulating.
+        the turn end signals that the next call to ``send()`` should
+        reset text tracking for the new segment.
         """
         if not self._ws or not self._authenticated:
             return SendResult(success=False, error="No authenticated client connected")
@@ -362,11 +417,10 @@ class PWAAdapter(BasePlatformAdapter):
         text = content or ""
 
         if finalize:
-            # Tool boundary or turn end — accumulate but don't close the
-            # stream.  The gateway will send the final answer via
-            # ``send()`` which triggers ``stream_done``.
+            # Tool boundary or turn end — save text and flag segment boundary.
             if text:
                 self._streaming_text = text
+            self._segment_boundary = True
             return SendResult(success=True)
 
         # Streaming delta.
@@ -379,7 +433,7 @@ class PWAAdapter(BasePlatformAdapter):
                         stream_delta(self._streaming_msg_id, delta)
                     )
                 except ConnectionClosed:
-                    self._streaming_text = ""
+                    self._reset_stream()
                     self._ws = None
                     self._authenticated = False
                     return SendResult(success=False, error="WebSocket closed")
@@ -464,6 +518,7 @@ class PWAAdapter(BasePlatformAdapter):
             if self._ws is ws:
                 self._ws = None
                 self._authenticated = False
+                self._reset_stream()
 
     async def _dispatch(self, data: dict[str, Any]) -> None:
         """Route an incoming JSON message to the appropriate handler."""
@@ -542,24 +597,25 @@ class PWAAdapter(BasePlatformAdapter):
 
         # Route to agent — adapter.send() / edit_message() will be called
         # during processing for streaming, then send() for the final response.
-        await self.handle_message(event)
+        self._in_agent_turn = True
+        try:
+            await self.handle_message(event)
+        finally:
+            self._in_agent_turn = False
 
-        # After agent finishes, finalize the stream.  The stream consumer
-        # has accumulated the final text via send() calls during processing.
+        # After agent finishes, finalize the stream.
         if self._streaming_msg_id and self._ws and self._authenticated:
             try:
                 final_text = self._streaming_text or ""
                 await self._ws.send(stream_done(self._streaming_msg_id, final_text))
-                self._streaming_msg_id = None
-                self._streaming_text = ""
                 # Persist the final assistant response.
                 if final_text:
                     asst_msg_id = self._persist_message("assistant", final_text)
                     self._append_hot("assistant", final_text, msg_id=asst_msg_id)
             except Exception:
                 logger.exception("Failed to finalize PWA stream")
-                self._streaming_msg_id = None
-                self._streaming_text = ""
+            finally:
+                self._reset_stream()
 
     # ------------------------------------------------------------------
     # Search (FTS5)
