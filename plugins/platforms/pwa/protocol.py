@@ -77,15 +77,6 @@ def history(messages: list[dict[str, Any]], has_more: bool = False) -> str:
     return _json({"type": "history", "messages": messages, "has_more": has_more})
 
 
-def session_info(session_id: str, started_at: float = 0.0) -> str:
-    """Notify client that a new session has begun (6h auto-split)."""
-    return _json({
-        "type": "session_info",
-        "session_id": session_id,
-        "started_at": started_at,
-    })
-
-
 def status_msg(connected: bool) -> str:
     """Connection status indicator."""
     return _json({"type": "status", "connected": connected})
