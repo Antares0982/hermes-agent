@@ -1970,7 +1970,7 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
                             )
                         configured = bool(entry.is_connected(probe_cfg))
                     except Exception as exc:
-                        logger.debug(
+                        logger.warning(
                             "is_connected for %s raised: %s — skipping enablement",
                             entry.name, exc,
                         )
