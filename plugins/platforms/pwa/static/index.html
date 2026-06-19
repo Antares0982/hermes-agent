@@ -234,12 +234,15 @@ const $toast = id('toast');
 function id(s) { return document.getElementById(s); }
 
 // ── Auth ──
+let _currentPassword = '';
+
 $authBtn.addEventListener('click', doAuth);
 $authPw.addEventListener('keydown', e => { if (e.key === 'Enter') doAuth(); });
 
 function doAuth() {
   const pw = $authPw.value.trim();
   if (!pw) return;
+  _currentPassword = pw;
   $authError.textContent = '';
   $authBtn.disabled = true;
   $authBtn.textContent = '连接中...';
@@ -273,6 +276,7 @@ function handleMessage(msg) {
   switch (msg.type) {
     case 'auth_ok':
       authenticated = true;
+      localStorage.setItem('pwa_password', _currentPassword);
       $authScreen.style.display = 'none';
       $chatScreen.style.display = 'flex';
       setConnected(true);
@@ -606,6 +610,17 @@ function toast(text) {
   $toast.classList.add('show');
   setTimeout(() => $toast.classList.remove('show'), 2000);
 }
+
+// ── Auto-login from localStorage ──
+(function() {
+  const saved = localStorage.getItem('pwa_password');
+  if (saved) {
+    _currentPassword = saved;
+    $authBtn.textContent = '连接中...';
+    $authBtn.disabled = true;
+    connect(saved);
+  }
+})();
 
 // ── Service Worker ──
 if ('serviceWorker' in navigator) {
