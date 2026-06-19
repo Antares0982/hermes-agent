@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Hermes 助手</title>
 <link rel="manifest" href="/manifest.json">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -289,10 +290,6 @@ function handleMessage(msg) {
         resumeStreaming(msg.streaming.msg_id, msg.streaming.text_so_far);
       }
       break;
-    case 'session_info':
-      currentSessionId = msg.session_id;
-      addSessionDivider('新的对话');
-      break;
     case 'stream_start':
       streamingMsgId = msg.msg_id;
       streamingEl = addBubble('assistant', '', true);
@@ -305,9 +302,9 @@ function handleMessage(msg) {
       break;
     case 'stream_done':
       if (streamingEl && msg.msg_id === streamingMsgId) {
-        streamingEl.textContent = msg.full_text;
+        streamingEl.innerHTML = markdownToHtml(msg.full_text);
         streamingEl.classList.remove('streaming');
-        messages.push({ role: 'assistant', text: msg.full_text });
+        messages.push({ role: 'assistant', text: msg.full_text, msg_id: msg.msg_id });
         streamingMsgId = null;
         streamingEl = null;
       }
@@ -340,7 +337,18 @@ function setConnected(on) {
 // ── Render ──
 function renderMessages() {
   $messages.innerHTML = '';
-  messages.forEach(m => addBubble(m.role, m.text, false));
+  let lastDividerIdx = -1;
+  messages.forEach((m, i) => {
+    if (m.role === 'divider') lastDividerIdx = i;
+    addBubble(m.role, m.text, false);
+  });
+  // Deduplicate dividers: keep only the most recent one.
+  if (lastDividerIdx >= 0) {
+    const allDividers = $messages.querySelectorAll('.session-divider');
+    allDividers.forEach((d, i) => {
+      if (i < allDividers.length - 1) d.style.display = 'none';
+    });
+  }
   scrollBottom();
   updateOldest();
 }
@@ -348,16 +356,21 @@ function renderMessages() {
 function addBubble(role, text, streaming) {
   const div = document.createElement('div');
   div.className = 'bubble ' + role + (streaming ? ' streaming' : '');
-  div.textContent = text;
+  // Role "divider" is a session boundary marker — rendered as a separator,
+  // not as a chat bubble.
+  if (role === 'divider') {
+    div.className = 'session-divider';
+    div.textContent = '── ' + text + ' ──';
+    $messages.appendChild(div);
+    return div;
+  }
+  if (role === 'assistant' && !streaming) {
+    div.innerHTML = markdownToHtml(text);
+  } else {
+    div.textContent = text;
+  }
   $messages.appendChild(div);
   return div;
-}
-
-function addSessionDivider(label) {
-  const div = document.createElement('div');
-  div.className = 'session-divider';
-  div.textContent = '── ' + label + ' ──';
-  $messages.appendChild(div);
 }
 
 function resumeStreaming(msgId, textSoFar) {
@@ -374,9 +387,19 @@ function prependHistory(newMsgs, hasMore) {
   const frag = document.createDocumentFragment();
   newMsgs.forEach(m => {
     const div = document.createElement('div');
-    div.className = 'bubble ' + (m.role || 'unknown');
-    div.textContent = m.text || '';
-    frag.prepend(div);
+    const role = m.role || 'unknown';
+    if (role === 'divider') {
+      div.className = 'session-divider';
+      div.textContent = '── ' + (m.text || m.content || '') + ' ──';
+    } else {
+      div.className = 'bubble ' + role;
+      if (role === 'assistant') {
+        div.innerHTML = markdownToHtml(m.text || m.content || '');
+      } else {
+        div.textContent = m.text || m.content || '';
+      }
+    }
+    frag.appendChild(div);
   });
   $messages.prepend(frag);
 
@@ -417,7 +440,6 @@ function updateLoadMore(hasMore, newMsgs) {
 }
 
 function updateOldest() {
-  const bubbles = $messages.querySelectorAll('.bubble');
   const first = messages[0];
   oldestMsgId = first ? first.msg_id || first.id : null;
 }
@@ -543,6 +565,18 @@ $installBtn.addEventListener('click', () => {
     });
   }
 });
+
+// ── Markdown ──
+function markdownToHtml(text) {
+  if (!text) return '';
+  try {
+    if (typeof marked !== 'undefined' && marked.parse) {
+      return marked.parse(text, { breaks: true });
+    }
+  } catch(e) {}
+  // Fallback: escape HTML and preserve newlines
+  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
 
 // ── Scroll ──
 function scrollBottom() {
