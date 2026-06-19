@@ -77,6 +77,10 @@ let
   # compiled, so it never carries a __pycache__ dir to exclude.
   bundledLocales = lib.cleanSource ../locales;
 
+  # PWA mobile static files (index.html, manifest.json, sw.js). Served by
+  # nginx as the root of the pwa virtualhost.
+  pwaStatic = lib.cleanSource ../plugins/platforms/pwa/static;
+
   runtimeDeps = [
     nodejs
     ripgrep
@@ -157,6 +161,7 @@ stdenv.mkDerivation (finalAttrs: {
     cp -r ${bundledSkills} $out/share/hermes-agent/skills
     cp -r ${bundledPlugins} $out/share/hermes-agent/plugins
     cp -r ${bundledLocales} $out/share/hermes-agent/locales
+    cp -r ${pwaStatic} $out/share/hermes-agent/pwa_static
     cp -r ${hermesWeb} $out/share/hermes-agent/web_dist
 
     mkdir -p $out/ui-tui
@@ -199,6 +204,7 @@ stdenv.mkDerivation (finalAttrs: {
       hermesWeb
       hermesNpmLib
       hermesVenv
+      pwaStatic
       ;
 
     # `hermesDesktop` references `finalAttrs.finalPackage` (this whole
