@@ -3,7 +3,7 @@
 // The chat itself requires WebSocket connectivity — offline mode
 // shows cached UI with a "reconnecting" indicator.
 
-const CACHE_NAME = 'hermes-pwa-v1';
+const CACHE_NAME = 'hermes-pwa-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
