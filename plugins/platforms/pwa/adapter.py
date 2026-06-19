@@ -85,8 +85,8 @@ def check_requirements() -> bool:
 
 
 def is_connected() -> bool:
-    """Return whether PWA WebSocket server is currently running."""
-    return _instance is not None and _instance._running
+    """Return whether PWA credentials are configured."""
+    return bool(os.getenv("PWA_PASSWORD"))
 
 
 _instance: Optional["PWAAdapter"] = None
