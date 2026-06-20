@@ -51,7 +51,6 @@
 
         tui = hermesAgent.hermesTui;
         web = hermesAgent.hermesWeb;
-        desktop = hermesAgent.hermesDesktop;
       };
     };
 }

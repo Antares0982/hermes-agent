@@ -11,7 +11,6 @@
   callPackage,
   python,
   nodejs_22,
-  electron,
   ripgrep,
   git,
   openssh,
@@ -200,18 +199,6 @@ stdenv.mkDerivation (finalAttrs: {
       hermesNpmLib
       hermesVenv
       ;
-
-    # `hermesDesktop` references `finalAttrs.finalPackage` (this whole
-    # derivation, after all overrides are applied) so the desktop wrapper
-    # can prepend its `/bin` to PATH.  The desktop's resolver step 4
-    # ("existing hermes on PATH") then picks up the fully wrapped
-    # `hermes` binary — venv with all deps, bundled skills/plugins,
-    # runtime PATH (ripgrep/git/etc).  No re-implementation
-    # of the agent resolution in the desktop wrapper.
-    hermesDesktop = callPackage ./desktop.nix {
-      inherit hermesNpmLib electron;
-      hermesAgent = finalAttrs.finalPackage;
-    };
 
     devShellHook = ''
       STAMP=".nix-stamps/hermes-agent"
