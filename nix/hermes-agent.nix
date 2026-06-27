@@ -1,9 +1,12 @@
-# nix/hermes-agent.nix — Overridable Hermes Agent package
+# nix/hermes-agent.nix — Overridable Hermes Agent package (Antares fork)
 #
 # callPackage auto-wires nixpkgs args; flake inputs are passed explicitly.
 # Users override via:
 #   pkgs.hermes-agent.override { extraPythonPackages = [...]; }
 #   pkgs.hermes-agent.override { extraDependencyGroups = [ "hindsight" ]; }
+#
+# NOTE: This is the Antares fork — TUI, Web, Desktop, and npm infrastructure
+# are stripped.  The gateway runs headless; UI components are unused.
 {
   lib,
   stdenv,
@@ -20,7 +23,6 @@
   uv2nix,
   pyproject-nix,
   pyproject-build-systems,
-  npm-lockfile-fix,
   # Locked git revision of the flake source — embedded so banner.py can
   # check for updates without needing a local .git directory. Null for
   # impure / dirty builds where flakes can't determine a rev.
@@ -34,18 +36,6 @@ let
   hermesVenv = callPackage ./python.nix {
     inherit uv2nix pyproject-nix pyproject-build-systems python;
     dependency-groups = [ "all" ] ++ extraDependencyGroups;
-  };
-
-  hermesNpmLib = callPackage ./lib.nix {
-    inherit npm-lockfile-fix nodejs;
-  };
-
-  hermesTui = callPackage ./tui.nix {
-    inherit hermesNpmLib;
-  };
-
-  hermesWeb = callPackage ./web.nix {
-    inherit hermesNpmLib;
   };
 
   bundledSkills = lib.cleanSourceWith {
@@ -156,10 +146,6 @@ stdenv.mkDerivation (finalAttrs: {
     cp -r ${bundledSkills} $out/share/hermes-agent/skills
     cp -r ${bundledPlugins} $out/share/hermes-agent/plugins
     cp -r ${bundledLocales} $out/share/hermes-agent/locales
-    cp -r ${hermesWeb} $out/share/hermes-agent/web_dist
-
-    mkdir -p $out/ui-tui
-    cp -r ${hermesTui}/lib/hermes-tui/* $out/ui-tui/
 
     ${lib.concatMapStringsSep "\n"
       (name: ''
@@ -168,9 +154,7 @@ stdenv.mkDerivation (finalAttrs: {
           --set HERMES_BUNDLED_SKILLS $out/share/hermes-agent/skills \
           --set HERMES_BUNDLED_PLUGINS $out/share/hermes-agent/plugins \
           --set HERMES_BUNDLED_LOCALES $out/share/hermes-agent/locales \
-          --set HERMES_WEB_DIST $out/share/hermes-agent/web_dist \
           --set HERMES_LOCALES $out/share/hermes-agent/locales \
-          --set HERMES_TUI_DIR $out/ui-tui \
           --set HERMES_PYTHON ${hermesVenv}/bin/python3 \
           --set HERMES_NODE ${lib.getExe nodejs} \
           ${lib.optionalString (rev != null) ''--set HERMES_REVISION ${rev} \''}
@@ -193,12 +177,7 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   passthru = {
-    inherit
-      hermesTui
-      hermesWeb
-      hermesNpmLib
-      hermesVenv
-      ;
+    inherit hermesVenv;
 
     devShellHook = ''
       STAMP=".nix-stamps/hermes-agent"
@@ -219,8 +198,8 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   meta = with lib; {
-    description = "AI agent with advanced tool-calling capabilities";
-    homepage = "https://github.com/NousResearch/hermes-agent";
+    description = "AI agent with advanced tool-calling capabilities (Antares fork)";
+    homepage = "https://github.com/Antares0982/hermes-agent";
     mainProgram = "hermes";
     license = licenses.mit;
     platforms = platforms.unix;
